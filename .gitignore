@@ -10,4 +10,8 @@ build/
 local.properties
 keystore.properties
 
+android-sdk/
+.android/
+*.apk
+
 mirakle.gradle

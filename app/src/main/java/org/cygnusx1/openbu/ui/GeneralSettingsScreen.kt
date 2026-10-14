@@ -11,6 +11,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -36,6 +41,8 @@ fun GeneralSettingsScreen(
     onForceDarkModeChanged: (Boolean) -> Unit,
     useVlcForRtsp: Boolean,
     onUseVlcForRtspChanged: (Boolean) -> Unit,
+    widgetRefreshInterval: Int = 30,
+    onWidgetRefreshIntervalChanged: (Int) -> Unit = {},
     onBack: () -> Unit,
 ) {
     Scaffold(
@@ -135,6 +142,40 @@ fun GeneralSettingsScreen(
                     checked = useVlcForRtsp,
                     onCheckedChange = onUseVlcForRtspChanged,
                 )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+
+            // Widget snapshot interval
+            Text(
+                text = stringResource(R.string.widget_refresh_interval),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = stringResource(R.string.widget_refresh_interval_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(15, 30, 60).forEach { seconds ->
+                    val selected = widgetRefreshInterval == seconds
+                    FilterChip(
+                        selected = selected,
+                        onClick = { onWidgetRefreshIntervalChanged(seconds) },
+                        label = { Text("${seconds}s") },
+                        modifier = Modifier.weight(1f),
+                        leadingIcon = if (selected) {
+                            { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        } else null,
+                    )
+                }
             }
         }
     }

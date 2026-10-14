@@ -22,6 +22,9 @@ import org.cygnusx1.openbu.network.PrintableObject
 import org.cygnusx1.openbu.network.PrinterStatus
 import org.cygnusx1.openbu.network.SavedPrinter
 import org.cygnusx1.openbu.network.ThreeMfParser
+import org.cygnusx1.openbu.data.PrintJobRequest
+import org.cygnusx1.openbu.data.PrintOptions
+import org.cygnusx1.openbu.data.ModelPackageHelper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,6 +32,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import android.util.Log
 import java.io.File
@@ -85,6 +89,9 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
 
     private val _debugLogging = MutableStateFlow(false)
     val debugLogging: StateFlow<Boolean> = _debugLogging.asStateFlow()
+
+    private val _widgetRefreshInterval = MutableStateFlow(30)
+    val widgetRefreshInterval: StateFlow<Int> = _widgetRefreshInterval.asStateFlow()
 
     private val _customPrinterName = MutableStateFlow("")
     val customPrinterName: StateFlow<String> = _customPrinterName.asStateFlow()
@@ -178,6 +185,9 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
     private val _ftpTransferName = MutableStateFlow<String?>(null)
     val ftpTransferName: StateFlow<String?> = _ftpTransferName.asStateFlow()
 
+    private val _pendingPrintJob = MutableStateFlow<PrintJobRequest?>(null)
+    val pendingPrintJob: StateFlow<PrintJobRequest?> = _pendingPrintJob.asStateFlow()
+
     // Timelapse state flows
     private val _timelapseFileList = MutableStateFlow<List<FtpFileEntry>>(emptyList())
     val timelapseFileList: StateFlow<List<FtpFileEntry>> = _timelapseFileList.asStateFlow()
@@ -233,6 +243,7 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
     private var mqttClient: BambuMqttClient? = null
     private var mqttJob: Job? = null
     private var ftpClient: BambuFtpsClient? = null
+    private var ftpTransferClient: BambuFtpsClient? = null
     private var ftpTransferJob: Job? = null
     private var timelapseFtpClient: BambuFtpsClient? = null
     private var timelapseDownloadJob: Job? = null
@@ -346,6 +357,19 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
         _relayUsername.value = prefs.getString("relay_username", "") ?: ""
         _relayPassword.value = prefs.getString("relay_password", "") ?: ""
         _useVlcForRtsp.value = prefs.getBoolean("use_vlc_rtsp", false)
+        _widgetRefreshInterval.value = prefs.getInt("widget_refresh_interval", 30)
+
+        viewModelScope.launch(Dispatchers.Default) {
+            while (isActive) {
+                val interval = _widgetRefreshInterval.value.coerceIn(15, 60)
+                delay(interval * 1000L)
+                try {
+                    triggerWidgetUpdate()
+                } catch (e: Exception) {
+                    Log.w("BambuVM", "Failed to update widget", e)
+                }
+            }
+        }
 
         // Migrate stale global RTSP keys
         if (prefs.contains("rtsp_enabled") || prefs.contains("rtsp_url")) {
@@ -428,6 +452,28 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
     fun setForceDarkMode(enabled: Boolean) {
         _forceDarkMode.value = enabled
         prefs.edit().putBoolean("force_dark_mode", enabled).apply()
+    }
+
+    fun setWidgetRefreshInterval(seconds: Int) {
+        _widgetRefreshInterval.value = seconds
+        prefs.edit().putInt("widget_refresh_interval", seconds).apply()
+        triggerWidgetUpdate()
+    }
+
+    fun triggerWidgetUpdate() {
+        val app = getApplication<Application>()
+        val isConnected = _connectionState.value == ConnectionState.Connected
+        val curSerial = _connectedSerialNumber.value
+        val curName = (discoveredPrinters.value.firstOrNull { it.serialNumber == curSerial }?.deviceName
+            ?: savedPrinters.value.firstOrNull { it.serialNumber == curSerial }?.deviceName)
+            ?.ifBlank { "Bambu Lab" } ?: "Bambu Lab"
+        org.cygnusx1.openbu.widget.PrinterWidgetProvider.updateAll(
+            context = app,
+            rawBitmap = _frame.value,
+            status = _printerStatus.value,
+            printerName = curName,
+            isConnected = isConnected,
+        )
     }
 
     fun setDebugLogging(enabled: Boolean) {
@@ -1328,6 +1374,7 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
         _ftpTransferName.value = "Downloading ${entry.name}"
         _ftpTransferProgress.value = 0f
 
+        ftpTransferClient = client
         ftpTransferJob = viewModelScope.launch {
             try {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
@@ -1349,6 +1396,7 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
                 _ftpTransferName.value = null
                 _ftpTransferProgress.value = null
             } finally {
+                ftpTransferClient = null
                 ftpTransferJob = null
             }
         }
@@ -1383,6 +1431,7 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
         _ftpTransferProgress.value = 0f
         _ftpError.value = null
 
+        ftpTransferClient = client
         ftpTransferJob = viewModelScope.launch {
             try {
                 app.contentResolver.openInputStream(uri)?.use { input ->
@@ -1404,6 +1453,7 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
             } catch (e: Exception) {
                 _ftpError.value = "Upload failed: ${e.message}"
             } finally {
+                ftpTransferClient = null
                 ftpTransferJob = null
                 _ftpTransferName.value = null
                 _ftpTransferProgress.value = null
@@ -1412,7 +1462,224 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun requestPrintJob(request: PrintJobRequest) {
+        _ftpError.value = null
+        _pendingPrintJob.value = request
+    }
+
+    fun clearPrintJob() {
+        _pendingPrintJob.value = null
+        _ftpError.value = null
+    }
+
+    private suspend fun ensureMqttConnected(timeoutMs: Long = 8000): BambuMqttClient? {
+        val ip = _connectedIp.value
+        val code = _connectedAccessCode.value
+        val serial = _connectedSerialNumber.value
+        if (ip.isBlank() || code.isBlank() || serial.isBlank()) return null
+
+        val current = mqttClient
+        if (current != null && current.connected.value) {
+            return current
+        }
+
+        Log.i("BambuVM", "ensureMqttConnected: MQTT not connected, reconnecting...")
+        _ftpTransferName.value = "Connecting to printer..."
+        connect(ip, code, serial)
+
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            val c = mqttClient
+            if (c != null && c.connected.value) {
+                Log.i("BambuVM", "ensureMqttConnected: MQTT connected successfully")
+                return c
+            }
+            delay(200)
+        }
+        Log.w("BambuVM", "ensureMqttConnected: Timed out waiting for MQTT connection")
+        return mqttClient
+    }
+
+    fun startPrintFromSd(remotePath: String, fileName: String, options: PrintOptions, md5: String = "") {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ip = _connectedIp.value
+            val code = _connectedAccessCode.value
+            val serial = _connectedSerialNumber.value
+            val mqtt = mqttClient ?: BambuMqttClient(
+                ip = ip,
+                accessCode = code,
+                serialNumber = serial,
+                rawSocketFactory = proxySocketFactory(effectiveProxyConfig(serial)),
+            )
+            val result = mqtt.startPrint(
+                remoteFilePath = remotePath,
+                subtaskName = fileName,
+                plateIndex = options.plateIndex,
+                bedLeveling = options.bedLeveling,
+                flowCali = options.flowCali,
+                vibrationCali = options.vibrationCali,
+                timelapse = options.timelapse,
+                useAms = options.useAms,
+                amsMapping = options.amsMapping,
+                md5 = md5,
+            )
+            if (result.isFailure) {
+                val errMsg = result.exceptionOrNull()?.message ?: "Command rejected"
+                Log.e("BambuVM", "startPrintFromSd error: $errMsg")
+                _ftpError.value = "Failed to start print: $errMsg"
+            }
+        }
+    }
+
+    fun uploadAndPrint(
+        uri: Uri,
+        options: PrintOptions,
+        startPrintAfterUpload: Boolean,
+        targetDir: String = "/model",
+        onComplete: (() -> Unit)? = null,
+    ) {
+        val ip = _connectedIp.value
+        val code = _connectedAccessCode.value
+        val serial = _connectedSerialNumber.value
+        if (ip.isBlank() || code.isBlank() || serial.isBlank()) {
+            _ftpError.value = "Printer not connected"
+            return
+        }
+        val app = getApplication<Application>()
+        var fileName = uri.lastPathSegment?.substringAfterLast("/") ?: "upload"
+        var fileSize = -1L
+        app.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIdx >= 0) cursor.getString(nameIdx)?.let { fileName = it }
+                val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (sizeIdx >= 0) fileSize = cursor.getLong(sizeIdx)
+            }
+        }
+        val lowerName = fileName.lowercase()
+        if (!lowerName.endsWith(".3mf") && !lowerName.endsWith(".gcode")) {
+            _ftpError.value = "Only .3mf and .gcode files can be printed"
+            return
+        }
+
+        var extractedMd5 = ""
+        if (lowerName.endsWith(".3mf")) {
+            try {
+                app.contentResolver.openInputStream(uri)?.use { stream ->
+                    val meta = ModelPackageHelper.inspect3mf(stream, options.plateIndex)
+                    extractedMd5 = meta.md5
+                    Log.i("BambuVM", "Extracted 3MF metadata: md5=$extractedMd5, plateCount=${meta.plateCount}")
+                }
+            } catch (e: Exception) {
+                Log.w("BambuVM", "Could not inspect 3mf: ${e.message}")
+            }
+        }
+
+        val cleanDir = targetDir.trimEnd('/')
+        val remotePath = "$cleanDir/$fileName"
+
+        _ftpTransferName.value = "Uploading $fileName"
+        _ftpTransferProgress.value = 0f
+        _ftpError.value = null
+
+        ftpTransferJob = viewModelScope.launch {
+            var dedicatedClient: BambuFtpsClient? = null
+            try {
+                val client = ftpClient ?: run {
+                    val c = BambuFtpsClient(ip, code, rawSocketFactory = proxySocketFactory(effectiveProxyConfig(serial)))
+                    c.connect()
+                    dedicatedClient = c
+                    c
+                }
+                ftpTransferClient = client
+
+                // Ensure target directory exists on printer
+                try {
+                    client.makeDirectory(cleanDir)
+                } catch (_: Exception) {}
+
+                app.contentResolver.openInputStream(uri)?.use { input ->
+                    client.uploadFile(remotePath, input, totalSize = fileSize) { bytesWritten, totalBytes ->
+                        if (totalBytes > 0) {
+                            _ftpTransferProgress.value = (bytesWritten.toFloat() / totalBytes).coerceIn(0f, 1f)
+                        }
+                    }
+                } ?: throw IOException("Cannot read file")
+
+                _ftpTransferProgress.value = null
+                if (startPrintAfterUpload) {
+                    _ftpTransferName.value = "Starting print..."
+                    ftpTransferClient = null
+                    dedicatedClient?.close()
+                    dedicatedClient = null
+
+                    // Give printer brief moment to release FTPS connection
+                    delay(500)
+
+                    val mqtt = mqttClient ?: BambuMqttClient(
+                        ip = ip,
+                        accessCode = code,
+                        serialNumber = serial,
+                        rawSocketFactory = proxySocketFactory(effectiveProxyConfig(serial)),
+                    )
+
+                    val result = mqtt.startPrint(
+                        remoteFilePath = remotePath,
+                        subtaskName = fileName,
+                        plateIndex = options.plateIndex,
+                        bedLeveling = options.bedLeveling,
+                        flowCali = options.flowCali,
+                        vibrationCali = options.vibrationCali,
+                        timelapse = options.timelapse,
+                        useAms = options.useAms,
+                        amsMapping = options.amsMapping,
+                        md5 = extractedMd5,
+                    )
+
+                    if (result.isSuccess) {
+                        _ftpTransferName.value = "Print started!"
+                        delay(1500)
+                        onComplete?.invoke()
+                    } else {
+                        val errMsg = result.exceptionOrNull()?.message ?: "Command send failed"
+                        Log.e("BambuVM", "startPrint error: $errMsg")
+                        _ftpError.value = "Failed to start print: $errMsg"
+                        delay(4000)
+                    }
+
+                    // Restore dashboard connections if dropped during upload
+                    if (_connectionState.value != ConnectionState.Connected || mqttClient?.connected?.value != true) {
+                        reconnect()
+                    }
+                } else {
+                    _ftpTransferName.value = "Uploaded to $remotePath"
+                    delay(1500)
+                    onComplete?.invoke()
+                }
+
+                if (ftpClient != null) {
+                    val files = ftpClient!!.listDirectory(_currentFtpPath.value)
+                    _fileList.value = files.sortedWith(compareByDescending<FtpFileEntry> { it.isDirectory }.thenBy { it.name })
+                }
+            } catch (e: CancellationException) {
+                _ftpTransferName.value = null
+                _ftpTransferProgress.value = null
+            } catch (e: Exception) {
+                Log.e("BambuVM", "uploadAndPrint failed", e)
+                _ftpError.value = "Upload failed: ${e.message}"
+                _ftpTransferName.value = null
+                _ftpTransferProgress.value = null
+            } finally {
+                ftpTransferClient = null
+                dedicatedClient?.close()
+                ftpTransferJob = null
+            }
+        }
+    }
+
     fun cancelTransfer() {
+        ftpTransferClient?.cancelTransfer()
+        ftpTransferClient = null
         ftpClient?.cancelTransfer()
         ftpTransferJob?.cancel()
         ftpTransferJob = null

@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
@@ -168,6 +169,7 @@ fun DashboardScreen(
     relayEnabled: Boolean = false,
     onRelayEnabledChanged: (Boolean) -> Unit = {},
     isRelayed: Boolean = false,
+    onEnterPip: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val series = printerSeriesFromSerial(serialNumber)
@@ -628,20 +630,41 @@ fun DashboardScreen(
                         )
                     }
 
-                    // Relayed badge
-                    if (isRelayed) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(8.dp)
-                                .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.relayed),
-                                color = Color.White,
-                                fontSize = 12.sp,
-                            )
+                    // Relayed badge and PiP button
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (isRelayed) {
+                            Box(
+                                modifier = Modifier
+                                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.relayed),
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                        }
+                        if (onEnterPip != null) {
+                            IconButton(
+                                onClick = onEnterPip,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.PictureInPictureAlt,
+                                    contentDescription = stringResource(R.string.cd_pip),
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -652,15 +675,15 @@ fun DashboardScreen(
 
         // Internal RTSP stream (non-P1 printer built-in camera) — always ExoPlayer
         if (showMainStream && internalRtspPlayer != null) {
-            RtspStreamCard(player = internalRtspPlayer, onClick = onOpenInternalRtspFullscreen, isRelayed = isRelayed)
+            RtspStreamCard(player = internalRtspPlayer, onClick = onOpenInternalRtspFullscreen, isRelayed = isRelayed, onEnterPip = onEnterPip)
             Spacer(modifier = Modifier.height(VerticalCardPadding))
         }
 
         // External RTSP stream
         if (rtspPlayer != null) {
-            RtspStreamCard(player = rtspPlayer, onClick = onOpenRtspFullscreen, isRelayed = isRelayed)
+            RtspStreamCard(player = rtspPlayer, onClick = onOpenRtspFullscreen, isRelayed = isRelayed, onEnterPip = onEnterPip)
         } else if (externalVlcContent != null) {
-            VlcRtspStreamCard(vlcContent = externalVlcContent, onClick = onOpenRtspFullscreen)
+            VlcRtspStreamCard(vlcContent = externalVlcContent, onClick = onOpenRtspFullscreen, onEnterPip = onEnterPip)
             Spacer(modifier = Modifier.height(VerticalCardPadding))
         }
 
@@ -1278,7 +1301,12 @@ private fun ExternalSpoolCard(vtTray: AmsTray?, modifier: Modifier = Modifier, i
 }
 
 @Composable
-private fun RtspStreamCard(player: ExoPlayer, onClick: () -> Unit, isRelayed: Boolean = false) {
+private fun RtspStreamCard(
+    player: ExoPlayer,
+    onClick: () -> Unit,
+    isRelayed: Boolean = false,
+    onEnterPip: (() -> Unit)? = null,
+) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable { onClick() },
         shape = RoundedCornerShape(12.dp),
@@ -1298,19 +1326,40 @@ private fun RtspStreamCard(player: ExoPlayer, onClick: () -> Unit, isRelayed: Bo
                     .background(Color.Black),
             )
 
-            if (isRelayed) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.relayed),
-                        color = Color.White,
-                        fontSize = 12.sp,
-                    )
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (isRelayed) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.relayed),
+                            color = Color.White,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+                if (onEnterPip != null) {
+                    IconButton(
+                        onClick = onEnterPip,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.PictureInPictureAlt,
+                            contentDescription = stringResource(R.string.cd_pip),
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
             }
         }

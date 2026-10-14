@@ -3,6 +3,7 @@ package org.cygnusx1.openbu.network
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -211,6 +212,13 @@ class BambuMqttClient(
                 printCmd.isNotEmpty() -> "print.command=$printCmd|msg=$printMsg"
                 infoCmd.isNotEmpty() -> "info.command=$infoCmd"
                 else -> keySignature(json)
+            }
+            if (print != null && printCmd.isNotEmpty()) {
+                val result = print.optString("result", "")
+                val reason = print.optString("reason", "")
+                if (result.isNotEmpty() || reason.isNotEmpty()) {
+                    Log.i(TAG, "Printer print command response: command=$printCmd, result=$result, reason=$reason")
+                }
             }
             if (seenKeySignatures.add(sig)) {
                 _mqttDataMessages.value = _mqttDataMessages.value + json.toString(2)
@@ -450,6 +458,100 @@ class BambuMqttClient(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to publish skip_objects", e)
         }
+    }
+
+    suspend fun sendCommandDirectly(
+        topic: String,
+        payloadJson: String,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        var tempSocket: SSLSocket? = null
+        try {
+            val sslSocket = createSslConnection()
+            tempSocket = sslSocket
+            sslSocket.soTimeout = 7000
+            val input = DataInputStream(sslSocket.inputStream)
+            val out = BufferedOutputStream(sslSocket.outputStream)
+
+            val connClientId = "openbu-send-${System.currentTimeMillis() % 100000}"
+            val connectPacket = buildConnectPacket(connClientId, "bblp", accessCode)
+            out.write(connectPacket)
+            out.flush()
+
+            val connackType = input.readByte().toInt() and 0xFF
+            val connackLen = readRemainingLength(input)
+            val connackData = ByteArray(connackLen)
+            input.readFully(connackData)
+            if ((connackType shr 4) != 2) {
+                throw IOException("Expected CONNACK, got type ${connackType shr 4}")
+            }
+            val returnCode = connackData[1].toInt() and 0xFF
+            if (returnCode != 0) {
+                throw IOException("MQTT CONNACK rejected: return code $returnCode")
+            }
+
+            val publishPacket = buildPublishPacket(topic, payloadJson)
+            out.write(publishPacket)
+            out.flush()
+            Log.i(TAG, "sendCommandDirectly: successfully sent to $topic")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "sendCommandDirectly failed", e)
+            Result.failure(e)
+        } finally {
+            try { tempSocket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun startPrint(
+        remoteFilePath: String,
+        subtaskName: String = "",
+        plateIndex: Int = 1,
+        bedLeveling: Boolean = true,
+        flowCali: Boolean = false,
+        vibrationCali: Boolean = false,
+        timelapse: Boolean = false,
+        useAms: Boolean = true,
+        amsMapping: List<Int> = listOf(0),
+        bedType: String = "auto",
+        md5: String = "",
+    ): Result<Unit> {
+        val topic = "device/$serialNumber/request"
+        val cleanPath = remoteFilePath.trimStart('/')
+
+        val json = buildStartPrintJson(
+            remoteFilePath = remoteFilePath,
+            subtaskName = subtaskName,
+            plateIndex = plateIndex,
+            bedLeveling = bedLeveling,
+            flowCali = flowCali,
+            vibrationCali = vibrationCali,
+            timelapse = timelapse,
+            useAms = useAms,
+            amsMapping = amsMapping,
+            bedType = bedType,
+            sequenceId = "0",
+            md5 = md5,
+        )
+
+        val out = socketOutput
+        if (out != null && _connected.value) {
+            try {
+                Log.i(TAG, "Publishing startPrint via existing MQTT connection to $topic (QoS 0): $json")
+                val packet = buildPublishPacket(topic, json.toString())
+                synchronized(out) {
+                    out.write(packet)
+                    out.flush()
+                }
+                Log.i(TAG, "startPrint command published successfully via existing connection for $cleanPath")
+                return Result.success(Unit)
+            } catch (e: Exception) {
+                Log.w(TAG, "Existing MQTT connection send failed ($e), falling back to direct connection")
+            }
+        } else {
+            Log.i(TAG, "Existing MQTT connection not available (socketOutput=$out, connected=${_connected.value}), using direct connection")
+        }
+
+        return sendCommandDirectly(topic, json.toString())
     }
 
     private fun requestStatus() {
@@ -999,5 +1101,62 @@ class BambuMqttClient(
 
     companion object {
         private const val TAG = "BambuMqtt"
+
+        internal fun buildStartPrintJson(
+            remoteFilePath: String,
+            subtaskName: String = "",
+            plateIndex: Int = 1,
+            bedLeveling: Boolean = true,
+            flowCali: Boolean = false,
+            vibrationCali: Boolean = false,
+            timelapse: Boolean = false,
+            useAms: Boolean = true,
+            amsMapping: List<Int> = listOf(0),
+            bedType: String = "auto",
+            sequenceId: String = "0",
+            md5: String = "",
+        ): JSONObject {
+            val cleanPath = remoteFilePath.trimStart('/')
+            val pathOnSd = if (cleanPath.startsWith("sdcard/", ignoreCase = true)) {
+                cleanPath.substring(7)
+            } else {
+                cleanPath
+            }
+            val displayName = subtaskName.ifBlank { pathOnSd.substringAfterLast("/") }
+            val isGcode = pathOnSd.endsWith(".gcode", ignoreCase = true) && !pathOnSd.endsWith(".gcode.3mf", ignoreCase = true)
+
+            return JSONObject().apply {
+                put("print", JSONObject().apply {
+                    put("sequence_id", sequenceId)
+                    if (isGcode) {
+                        put("command", "gcode_file")
+                        put("param", "/sdcard/$pathOnSd")
+                    } else {
+                        put("command", "project_file")
+                        put("param", "Metadata/plate_$plateIndex.gcode")
+                        put("plate_idx", (plateIndex - 1).coerceAtLeast(0))
+                        put("project_id", "0")
+                        put("profile_id", "0")
+                        put("task_id", "0")
+                        put("subtask_id", "0")
+                        put("subtask_name", displayName)
+                        put("url", "file:///sdcard/$pathOnSd")
+                        if (md5.isNotBlank()) {
+                            put("md5", md5)
+                        }
+                        put("timelapse", timelapse)
+                        put("bed_type", bedType)
+                        put("bed_leveling", bedLeveling)
+                        put("bed_levelling", bedLeveling)
+                        put("flow_cali", flowCali)
+                        put("vibration_cali", vibrationCali)
+                        put("layer_inspect", true)
+                        put("use_ams", useAms)
+                        val mapping = if (useAms && amsMapping.isNotEmpty()) amsMapping else listOf(-1)
+                        put("ams_mapping", JSONArray(mapping))
+                    }
+                })
+            }
+        }
     }
 }

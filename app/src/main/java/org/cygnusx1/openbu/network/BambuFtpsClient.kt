@@ -246,6 +246,17 @@ class BambuFtpsClient(
         if (resp.code != 250) throw IOException("DELE failed: ${resp.text}")
     }
 
+    suspend fun makeDirectory(remotePath: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            sendCommand("MKD $remotePath")
+            val resp = readResponse()
+            resp.code == 257 || resp.code == 250
+        } catch (e: Exception) {
+            Log.d(TAG, "MKD $remotePath: ${e.message}")
+            false
+        }
+    }
+
     fun cancelTransfer() {
         try { activeDataSocket?.close() } catch (_: Exception) {}
         activeDataSocket = null

@@ -1,9 +1,14 @@
 package org.cygnusx1.openbu
 
+import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
-import android.view.WindowManager
+import android.app.PictureInPictureParams
+import android.content.res.Configuration
+import android.os.Build
+import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -14,6 +19,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -35,11 +41,14 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import org.cygnusx1.openbu.data.FilamentRepository
+import org.cygnusx1.openbu.data.PrintJobRequest
+import org.cygnusx1.openbu.data.PrintOptions
 import org.cygnusx1.openbu.network.Socks5SocketFactory
 import org.cygnusx1.openbu.network.Socks5TlsSslSocketFactory
 import org.cygnusx1.openbu.ui.ConnectionScreen
 import org.cygnusx1.openbu.ui.DashboardScreen
 import org.cygnusx1.openbu.ui.FileManagerScreen
+import org.cygnusx1.openbu.ui.PrintJobDialog
 import org.cygnusx1.openbu.ui.TimelapseScreen
 import org.cygnusx1.openbu.ui.PrinterSettingsScreen
 import org.cygnusx1.openbu.ui.RtspStreamScreen
@@ -48,6 +57,8 @@ import org.cygnusx1.openbu.ui.GeneralSettingsScreen
 import org.cygnusx1.openbu.ui.RelaySettingsScreen
 import org.cygnusx1.openbu.ui.DebuggingSettingsScreen
 import org.cygnusx1.openbu.ui.SkipObjectsScreen
+import android.view.WindowManager
+import org.cygnusx1.openbu.ui.PipStreamScreen
 import org.cygnusx1.openbu.ui.StreamScreen
 import org.cygnusx1.openbu.ui.VideoPlayerScreen
 import org.cygnusx1.openbu.ui.VlcPlayerHolder
@@ -60,6 +71,53 @@ import org.cygnusx1.openbu.viewmodel.ConnectionState
 class MainActivity : ComponentActivity() {
     private var viewModelRef: BambuStreamViewModel? = null
     private var volumeDownPressTime = 0L
+
+    var isInPipMode by mutableStateOf(false)
+        private set
+    private var hasActiveStream: Boolean = false
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        isInPipMode = isInPictureInPictureMode
+    }
+
+    fun enterPip() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(16, 9))
+                .build()
+            try {
+                enterPictureInPictureMode(params)
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Failed to enter PiP mode", e)
+            }
+        }
+    }
+
+    private fun updatePipParams(hasActiveStream: Boolean) {
+        this.hasActiveStream = hasActiveStream
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val params = PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(16, 9))
+                    .setAutoEnterEnabled(hasActiveStream)
+                    .build()
+                setPictureInPictureParams(params)
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Failed to update PiP params", e)
+            }
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (hasActiveStream) {
+            enterPip()
+        }
+    }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
@@ -87,6 +145,69 @@ class MainActivity : ComponentActivity() {
         return super.onKeyUp(keyCode, event)
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingFileIntent(intent, viewModelRef)
+    }
+
+    private fun handleIncomingFileIntent(intent: Intent?, vm: BambuStreamViewModel?) {
+        if (intent == null || vm == null) return
+        val action = intent.action
+        val targetUri = (when (action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND -> {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+                }
+            }
+            else -> null
+        }) ?: return
+
+        var fileName = targetUri.lastPathSegment?.substringAfterLast("/") ?: "print_job"
+        var fileSize = -1L
+        try {
+            contentResolver.query(targetUri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (nameIdx >= 0) cursor.getString(nameIdx)?.let { fileName = it }
+                    val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (sizeIdx >= 0) fileSize = cursor.getLong(sizeIdx)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to query incoming file Uri", e)
+        }
+
+        val lower = fileName.lowercase()
+        val is3mf = lower.endsWith(".3mf")
+        val isGcode = lower.endsWith(".gcode")
+        var resolvedFileName = fileName
+        if (!is3mf && !isGcode) {
+            val mime = intent.type ?: try { contentResolver.getType(targetUri) } catch (_: Exception) { null }
+            if (mime == "model/3mf" || mime == "application/vnd.ms-package.3dmanufacturing-3dmodel+xml") {
+                resolvedFileName = "$resolvedFileName.3mf"
+            } else if (mime == "text/x-gcode") {
+                resolvedFileName = "$resolvedFileName.gcode"
+            }
+        }
+
+        val finalLower = resolvedFileName.lowercase()
+        if (finalLower.endsWith(".3mf") || finalLower.endsWith(".gcode")) {
+            intent.action = null // Clear action so config changes don't re-trigger
+            vm.requestPrintJob(
+                PrintJobRequest(
+                    uri = targetUri,
+                    fileName = resolvedFileName,
+                    fileSize = fileSize,
+                )
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -94,6 +215,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: BambuStreamViewModel = viewModel()
             viewModelRef = viewModel
+
+            LaunchedEffect(Unit) {
+                handleIncomingFileIntent(intent, viewModel)
+            }
 
             LifecycleResumeEffect(Unit) {
                 Log.d("AutoReconnect", "Activity resumed, calling retryIfNeeded")
@@ -105,6 +230,7 @@ class MainActivity : ComponentActivity() {
             val customBgColor by viewModel.customBgColor.collectAsState()
             val connectionState by viewModel.connectionState.collectAsState()
             val isConnected = connectionState == ConnectionState.Connected
+            val widgetRefreshInterval by viewModel.widgetRefreshInterval.collectAsState()
             OpenbuTheme(
                 overrideDeviceTheme = forceDarkMode,
                 customBackgroundColor = if (isConnected) customBgColor else null,
@@ -293,7 +419,20 @@ class MainActivity : ComponentActivity() {
                 val skipObjectsError by viewModel.skipObjectsError.collectAsState()
                 val skipObjectsPlateImage by viewModel.skipObjectsPlateImage.collectAsState()
 
-                when {
+                LaunchedEffect(frame, internalRtspPlayer, rtspPlayer, externalVlcContent, isConnected) {
+                    val hasStream = isConnected && (frame != null || internalRtspPlayer != null || rtspPlayer != null || externalVlcContent != null)
+                    updatePipParams(hasStream)
+                }
+
+                if (isInPipMode) {
+                    PipStreamScreen(
+                        frame = frame,
+                        internalRtspPlayer = internalRtspPlayer,
+                        rtspPlayer = rtspPlayer,
+                        externalVlcContent = fullscreenVlcContent ?: externalVlcContent,
+                    )
+                } else {
+                    when {
                     // Skip Objects screen
                     showSkipObjects -> {
                         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
@@ -381,6 +520,16 @@ class MainActivity : ComponentActivity() {
                             onDownloadFile = { viewModel.downloadFile(it) },
                             onDeleteFile = { viewModel.deleteFtpFile(it) },
                             onUploadFile = { viewModel.uploadFile(it) },
+                            onSelectFileForPrint = { entry ->
+                                val remotePath = if (currentFtpPath.endsWith("/")) "$currentFtpPath${entry.name}" else "$currentFtpPath/${entry.name}"
+                                viewModel.requestPrintJob(
+                                    PrintJobRequest(
+                                        remotePath = remotePath,
+                                        fileName = entry.name,
+                                        fileSize = entry.size,
+                                    )
+                                )
+                            },
                             onClearError = { viewModel.clearFtpError() },
                             onBack = {
                                 if (currentFtpPath != "/") {
@@ -424,6 +573,8 @@ class MainActivity : ComponentActivity() {
                             onForceDarkModeChanged = { viewModel.setForceDarkMode(it) },
                             useVlcForRtsp = useVlcForRtsp,
                             onUseVlcForRtspChanged = { viewModel.setUseVlcForRtsp(it) },
+                            widgetRefreshInterval = widgetRefreshInterval,
+                            onWidgetRefreshIntervalChanged = { viewModel.setWidgetRefreshInterval(it) },
                             onBack = {
                                 showGeneralSettings = false
                                 showSettings = true
@@ -511,6 +662,7 @@ class MainActivity : ComponentActivity() {
                             frame = frame,
                             fps = fps,
                             isRelayed = currentProxyConfig != null,
+                            onEnterPip = { enterPip() },
                         )
                     }
                     connectionState == ConnectionState.Connected && showInternalRtspFullscreen && internalRtspUrl.isNotBlank() -> {
@@ -520,7 +672,11 @@ class MainActivity : ComponentActivity() {
                             showInternalRtspFullscreen = false
                             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                         }
-                        RtspStreamScreen(player = internalRtspPlayer, isRelayed = currentProxyConfig != null)
+                        RtspStreamScreen(
+                            player = internalRtspPlayer,
+                            isRelayed = currentProxyConfig != null,
+                            onEnterPip = { enterPip() },
+                        )
                     }
                     connectionState == ConnectionState.Connected && showRtspFullscreen && effectiveRtspUrl.isNotBlank() -> {
                         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -529,7 +685,11 @@ class MainActivity : ComponentActivity() {
                             showRtspFullscreen = false
                             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                         }
-                        RtspStreamScreen(player = rtspPlayer, isRelayed = currentProxyConfig != null)
+                        RtspStreamScreen(
+                            player = rtspPlayer,
+                            isRelayed = currentProxyConfig != null,
+                            onEnterPip = { enterPip() },
+                        )
                     }
                     connectionState == ConnectionState.Connected || hasLastConnectedPrinter -> {
                         if (connectionState == ConnectionState.Connected) {
@@ -623,6 +783,7 @@ class MainActivity : ComponentActivity() {
                             relayEnabled = dashRelayEnabled,
                             onRelayEnabledChanged = { viewModel.setRelayEnabled(it) },
                             isRelayed = currentProxyConfig != null,
+                            onEnterPip = { enterPip() },
                         )
                         // VLC fullscreen overlay — rendered on top of the dashboard so the
                         // card player's SurfaceView is never detached from the window.
@@ -630,8 +791,8 @@ class MainActivity : ComponentActivity() {
                             BackHandler {
                                 showRtspFullscreen = false
                             }
-                            if (fullscreenVlcContent != null) VlcRtspStreamScreen(vlcContent = fullscreenVlcContent)
-                            else RtspStreamScreen(player = rtspPlayer)
+                            if (fullscreenVlcContent != null) VlcRtspStreamScreen(vlcContent = fullscreenVlcContent, onEnterPip = { enterPip() })
+                            else RtspStreamScreen(player = rtspPlayer, onEnterPip = { enterPip() })
                         }
                         } // end Box
                     }
@@ -667,6 +828,79 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+
+                val pendingPrintJob by viewModel.pendingPrintJob.collectAsState()
+                val currentPrinterName = (discoveredPrinters.firstOrNull { it.serialNumber == connectedSerialNumber }?.deviceName
+                    ?: savedPrinters.firstOrNull { it.serialNumber == connectedSerialNumber }?.deviceName)
+                    ?.ifBlank { "Bambu Lab Printer" } ?: "Bambu Lab Printer"
+
+                pendingPrintJob?.let { request ->
+                    PrintJobDialog(
+                        request = request,
+                        printerName = currentPrinterName,
+                        isConnected = isConnected,
+                        hasAms = printerStatus.amsUnits.isNotEmpty(),
+                        amsUnits = printerStatus.amsUnits,
+                        activeTrayId = printerStatus.trayNow,
+                        errorMessage = ftpError,
+                        transferProgress = ftpTransferProgress,
+                        transferName = ftpTransferName,
+                        onCancelTransfer = { viewModel.cancelTransfer() },
+                        onConnectPrinter = if (savedPrinters.isNotEmpty()) { { viewModel.reconnect() } } else null,
+                        onUploadOnly = { opts ->
+                            request.uri?.let { uri ->
+                                viewModel.uploadAndPrint(
+                                    uri = uri,
+                                    options = opts,
+                                    startPrintAfterUpload = false,
+                                    targetDir = "/model",
+                                    onComplete = {
+                                        viewModel.clearPrintJob()
+                                    },
+                                )
+                            }
+                        },
+                        onUploadAndPrint = { opts ->
+                            request.uri?.let { uri ->
+                                viewModel.uploadAndPrint(
+                                    uri = uri,
+                                    options = opts,
+                                    startPrintAfterUpload = true,
+                                    targetDir = "/model",
+                                    onComplete = {
+                                        viewModel.clearPrintJob()
+                                        viewModel.closeFileManager()
+                                        showFileManager = false
+                                    },
+                                )
+                            }
+                        },
+                        onStartPrintFromSd = { opts ->
+                            request.remotePath?.let { path ->
+                                viewModel.startPrintFromSd(
+                                    remotePath = path,
+                                    fileName = request.fileName,
+                                    options = opts,
+                                    md5 = request.md5,
+                                )
+                                viewModel.clearPrintJob()
+                                viewModel.closeFileManager()
+                                showFileManager = false
+                            }
+                        },
+                        onDownloadFile = {
+                            val entry = fileList.firstOrNull { it.name == request.fileName }
+                            if (entry != null) {
+                                viewModel.downloadFile(entry)
+                            }
+                            viewModel.clearPrintJob()
+                        },
+                        onDismiss = {
+                            viewModel.clearPrintJob()
+                        },
+                    )
+                }
+                } // end else (!isInPipMode)
             }
         }
     }

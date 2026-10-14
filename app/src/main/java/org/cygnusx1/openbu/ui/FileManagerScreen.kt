@@ -21,11 +21,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -69,6 +78,7 @@ fun FileManagerScreen(
     onDownloadFile: (FtpFileEntry) -> Unit,
     onDeleteFile: (FtpFileEntry) -> Unit,
     onUploadFile: (Uri) -> Unit,
+    onSelectFileForPrint: (FtpFileEntry) -> Unit = {},
     onClearError: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -229,22 +239,114 @@ fun FileManagerScreen(
                         }
 
                         items(fileList, key = { it.name }) { entry ->
-                            FileEntryRow(
-                                entry = entry,
-                                onClick = {
-                                    if (entry.isDirectory) {
-                                        onNavigateTo(entry.name)
-                                    } else {
-                                        onDownloadFile(entry)
-                                    }
-                                },
-                                onLongClick = {
-                                    if (!entry.isDirectory) {
-                                        fileToDelete = entry
-                                    }
-                                },
-                            )
-                            HorizontalDivider()
+                            if (entry.isDirectory) {
+                                FileEntryRow(
+                                    entry = entry,
+                                    onClick = { onNavigateTo(entry.name) },
+                                    onLongClick = {},
+                                )
+                                HorizontalDivider()
+                            } else {
+                                val lower = entry.name.lowercase()
+                                val isPrintable = lower.endsWith(".3mf") || lower.endsWith(".gcode")
+                                val dismissState = rememberSwipeToDismissBoxState(
+                                    confirmValueChange = { value ->
+                                        when (value) {
+                                            SwipeToDismissBoxValue.StartToEnd -> {
+                                                if (isPrintable) {
+                                                    onSelectFileForPrint(entry)
+                                                }
+                                                false
+                                            }
+                                            SwipeToDismissBoxValue.EndToStart -> {
+                                                fileToDelete = entry
+                                                false
+                                            }
+                                            SwipeToDismissBoxValue.Settled -> false
+                                        }
+                                    },
+                                    positionalThreshold = { distance -> distance * 0.3f },
+                                )
+
+                                SwipeToDismissBox(
+                                    state = dismissState,
+                                    enableDismissFromStartToEnd = isPrintable,
+                                    enableDismissFromEndToStart = true,
+                                    backgroundContent = {
+                                        val direction = dismissState.dismissDirection
+                                        val color by animateColorAsState(
+                                            targetValue = when (dismissState.targetValue) {
+                                                SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.primaryContainer
+                                                SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.errorContainer
+                                                SwipeToDismissBoxValue.Settled -> Color.Transparent
+                                            },
+                                            label = "swipeColor",
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(color)
+                                                .padding(horizontal = 20.dp),
+                                            contentAlignment = when (direction) {
+                                                SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                                                SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
+                                                SwipeToDismissBoxValue.Settled -> Alignment.Center
+                                            },
+                                        ) {
+                                            if (direction == SwipeToDismissBoxValue.StartToEnd && isPrintable) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Print,
+                                                        contentDescription = stringResource(R.string.start_print),
+                                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                        modifier = Modifier.size(24.dp),
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text(
+                                                        text = stringResource(R.string.start_print),
+                                                        style = MaterialTheme.typography.labelLarge,
+                                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                        fontWeight = FontWeight.Bold,
+                                                    )
+                                                }
+                                            } else if (direction == SwipeToDismissBoxValue.EndToStart) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = stringResource(R.string.delete),
+                                                        style = MaterialTheme.typography.labelLarge,
+                                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                                        fontWeight = FontWeight.Bold,
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Delete,
+                                                        contentDescription = stringResource(R.string.delete),
+                                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                                        modifier = Modifier.size(24.dp),
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    },
+                                    content = {
+                                        FileEntryRow(
+                                            entry = entry,
+                                            onPrintClick = if (isPrintable) { { onSelectFileForPrint(entry) } } else null,
+                                            onClick = {
+                                                if (isPrintable) {
+                                                    onSelectFileForPrint(entry)
+                                                } else {
+                                                    onDownloadFile(entry)
+                                                }
+                                            },
+                                            onLongClick = {
+                                                fileToDelete = entry
+                                            },
+                                        )
+                                    },
+                                )
+                                HorizontalDivider()
+                            }
                         }
                     }
                 }
@@ -269,10 +371,12 @@ private fun FileEntryRow(
     entry: FtpFileEntry,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onPrintClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -310,6 +414,16 @@ private fun FileEntryRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+        }
+        if (onPrintClick != null) {
+            IconButton(onClick = onPrintClick) {
+                Icon(
+                    imageVector = Icons.Filled.Print,
+                    contentDescription = stringResource(R.string.cd_print_file),
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
             }
         }
     }

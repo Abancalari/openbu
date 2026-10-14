@@ -206,4 +206,35 @@
 
     <!-- Skip objects -->
     <string name="already_skipped">Already skipped</string>
+
+    <!-- Print job -->
+    <string name="start_print">Start Print</string>
+    <string name="send_to_printer">Send to Printer</string>
+    <string name="upload_and_print">Upload &amp; Print</string>
+    <string name="upload_only">Upload Only</string>
+    <string name="download_to_device">Download</string>
+    <string name="bed_leveling">Bed Leveling</string>
+    <string name="bed_leveling_desc">Run automatic bed mesh leveling before printing</string>
+    <string name="timelapse_recording">Timelapse</string>
+    <string name="timelapse_recording_desc">Record a timelapse video during the print</string>
+    <string name="flow_calibration">Flow Calibration</string>
+    <string name="flow_calibration_desc">Perform dynamic flow rate calibration</string>
+    <string name="vibration_calibration">Vibration Calibration</string>
+    <string name="vibration_calibration_desc">Run resonant frequency sweep</string>
+    <string name="use_ams_label">Use AMS</string>
+    <string name="use_ams_desc">Feed filament from Automatic Material System</string>
+    <string name="ams_slot">AMS Slot</string>
+    <string name="preview">Preview</string>
+    <string name="printer_not_connected_warning">Printer is not connected. Please connect first.</string>
+    <string name="widget_title">Printer Status</string>
+    <string name="widget_description">Live snapshot, print progress, and status</string>
+    <string name="widget_refresh_interval">Widget Snapshot Interval</string>
+    <string name="widget_refresh_interval_desc">How often the home screen widget refreshes camera snapshot and print stats</string>
+    <string name="seconds_15">15 seconds</string>
+    <string name="seconds_30">30 seconds</string>
+    <string name="seconds_60">60 seconds</string>
+    <string name="picture_in_picture">Picture-in-Picture</string>
+    <string name="cd_pip">Enter Picture-in-Picture</string>
+    <string name="cd_print_file">Print file</string>
+    <string name="swipe_to_print_or_delete">Swipe right to print, swipe left to delete</string>
 </resources>
