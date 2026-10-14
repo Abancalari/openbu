@@ -430,6 +430,7 @@ class MainActivity : ComponentActivity() {
                         internalRtspPlayer = internalRtspPlayer,
                         rtspPlayer = rtspPlayer,
                         externalVlcContent = fullscreenVlcContent ?: externalVlcContent,
+                        printerStatus = printerStatus,
                     )
                 } else {
                     when {
