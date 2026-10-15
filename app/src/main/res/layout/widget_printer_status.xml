@@ -4,10 +4,14 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_bg"
+    android:gravity="center_vertical"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:paddingStart="14dp"
+    android:paddingTop="12dp"
+    android:paddingEnd="14dp"
+    android:paddingBottom="12dp">
 
-    <!-- Header Row -->
+    <!-- Header Row: Printer Name, Status Badge, Live Stream/PiP Button, Refresh -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -46,74 +50,110 @@
             android:paddingBottom="2dp"
             android:text="IDLE"
             android:textColor="#FFFFFF"
-            android:textSize="11sp"
+            android:textSize="10sp"
             android:textStyle="bold" />
+
+        <!-- Quick Action Button: Open Live Stream / PiP -->
+        <LinearLayout
+            android:id="@+id/widget_stream_button"
+            android:layout_width="wrap_content"
+            android:layout_height="26dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/widget_action_btn_bg"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
+
+            <ImageView
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:contentDescription="Open Live Stream"
+                android:src="@drawable/ic_widget_pip" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="Live"
+                android:textColor="#E8E8F0"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <ImageButton
             android:id="@+id/widget_refresh_button"
             android:layout_width="26dp"
             android:layout_height="26dp"
-            android:layout_marginStart="6dp"
+            android:layout_marginStart="4dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="Refresh"
-            android:padding="2dp"
+            android:padding="3dp"
             android:scaleType="fitCenter"
             android:src="@drawable/ic_widget_refresh" />
     </LinearLayout>
 
-    <!-- Camera Snapshot / Preview Container -->
-    <FrameLayout
-        android:id="@+id/widget_snapshot_container"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_marginTop="6dp"
-        android:layout_marginBottom="6dp"
-        android:layout_weight="1"
-        android:background="#121214">
-
-        <ImageView
-            android:id="@+id/widget_snapshot"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:contentDescription="@string/cd_camera_preview"
-            android:scaleType="centerCrop" />
-
-        <TextView
-            android:id="@+id/widget_no_stream_text"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:text="@string/app_name"
-            android:textColor="#666670"
-            android:textSize="12sp"
-            android:visibility="gone" />
-    </FrameLayout>
-
-    <!-- Print Job Info -->
-    <TextView
-        android:id="@+id/widget_subtask_name"
+    <!-- Middle Row: Job Name + Current Stage on Left, Large % on Right -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:ellipsize="end"
-        android:singleLine="true"
-        android:text="No active print"
-        android:textColor="#E0E0E0"
-        android:textSize="12sp"
-        android:textStyle="bold" />
+        android:layout_marginTop="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="10dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/widget_subtask_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:singleLine="true"
+                android:text="Ready to print"
+                android:textColor="#F2F2F7"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_stage_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:singleLine="true"
+                android:text="Stage: Idle"
+                android:textColor="#B4B4C0"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/widget_percent_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0%"
+            android:textColor="#00E676"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 
     <!-- Progress Bar -->
     <ProgressBar
         android:id="@+id/widget_progress_bar"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
-        android:layout_height="6dp"
-        android:layout_marginTop="4dp"
-        android:layout_marginBottom="4dp"
+        android:layout_height="8dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="6dp"
         android:max="100"
         android:progress="0"
         android:progressDrawable="@drawable/widget_progress_bar" />
 
-    <!-- Footer Stats Row -->
+    <!-- Bottom Row: ETA / Remaining Time on Left, Layer Progress on Right -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -121,21 +161,24 @@
         android:orientation="horizontal">
 
         <TextView
-            android:id="@+id/widget_progress_text"
+            android:id="@+id/widget_eta_text"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="0%"
-            android:textColor="#A0A0A0"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:text="No active job"
+            android:textColor="#A0A0AC"
             android:textSize="11sp" />
 
         <TextView
-            android:id="@+id/widget_temps_text"
+            android:id="@+id/widget_layer_text"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="N: --°C  B: --°C"
-            android:textColor="#A0A0A0"
-            android:textSize="11sp" />
+            android:text="Layer -- / --"
+            android:textColor="#C8C8D4"
+            android:textSize="11sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
 </LinearLayout>

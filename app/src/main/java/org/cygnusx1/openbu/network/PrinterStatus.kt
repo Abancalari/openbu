@@ -37,6 +37,7 @@ data class PrinterStatus(
     val layerNum: Int = 0,
     val totalLayerNum: Int = 0,
     val mcRemainingTime: Int = 0,
+    val stgCur: Int = -1,
     val nozzleTemper: Float = 0f,
     val nozzleTargetTemper: Float = 0f,
     val bedTemper: Float = 0f,
@@ -57,7 +58,67 @@ data class PrinterStatus(
     val spdLvl: Int = 2, // 2 = Normal = 100%
     val skippedObjects: List<Int> = emptyList(), // from s_obj
     val hmsErrors: List<HmsError> = emptyList(),
-)
+) {
+    val cleanJobName: String
+        get() = subtaskName.ifBlank {
+            gcodeFile.substringAfterLast('/')
+        }.removeSuffix(".gcode.3mf").removeSuffix(".3mf").removeSuffix(".gcode").trim()
+
+    val stageLabel: String
+        get() {
+            val specificStage = when (stgCur) {
+                1 -> "Auto Bed Leveling"
+                2 -> "Preheating Bed"
+                3 -> "Vibration Calibration"
+                4 -> "Changing Filament"
+                5 -> "M400 Pause"
+                6 -> "Filament Runout"
+                7 -> "Heating Hotend"
+                8, 19 -> "Calibrating Extrusion"
+                9 -> "Scanning Bed"
+                10 -> "Inspecting First Layer"
+                11 -> "Identifying Build Plate"
+                12, 18 -> "Calibrating Lidar"
+                13 -> "Homing Toolhead"
+                14 -> "Cleaning Nozzle"
+                15 -> "Checking Extruder Temp"
+                16, 30 -> "Paused"
+                17 -> "Front Cover Off"
+                20, 21, 28 -> "Temp Error"
+                22 -> "Unloading Filament"
+                23 -> "Skipped Step"
+                24 -> "Loading Filament"
+                25, 31 -> "Motor Calibration"
+                26 -> "AMS Disconnected"
+                27 -> "Heatbreak Fan Error"
+                29 -> "Cooling Chamber"
+                32, 35 -> "Nozzle Clog"
+                33 -> "Cutter Error"
+                34 -> "First Layer Error"
+                else -> null
+            }
+            if (specificStage != null && gcodeState.uppercase() in setOf("PREPARE", "RUNNING", "PAUSE")) {
+                return specificStage
+            }
+            return when (gcodeState.uppercase()) {
+                "PREPARE" -> {
+                    val heatingBed = bedTargetTemper > 0f && bedTemper < bedTargetTemper - 2f
+                    val heatingNozzle = nozzleTargetTemper > 0f && nozzleTemper < nozzleTargetTemper - 5f
+                    when {
+                        heatingBed && heatingNozzle -> "Heating Bed & Nozzle"
+                        heatingBed -> "Preheating Bed"
+                        heatingNozzle -> "Heating Nozzle"
+                        else -> "Preparing Print"
+                    }
+                }
+                "RUNNING" -> "Printing"
+                "PAUSE" -> "Paused"
+                "FINISH" -> "Print Complete"
+                "FAILED" -> "Print Failed"
+                else -> "Idle"
+            }
+        }
+}
 
 data class SavedPrinter(
     val ip: String,

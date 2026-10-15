@@ -365,7 +365,12 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
                 val interval = _widgetRefreshInterval.value.coerceIn(15, 60)
                 delay(interval * 1000L)
                 try {
-                    refreshForWidgetSuspend()
+                    val isPrinting = _printerStatus.value.gcodeState.uppercase() in setOf("PREPARE", "RUNNING", "PAUSE")
+                    val screenOn = org.cygnusx1.openbu.widget.PrinterWidgetProvider.isScreenInteractive(application)
+                    val hasWidgets = org.cygnusx1.openbu.widget.PrinterWidgetProvider.hasPlacedWidgets(application)
+                    if (isPrinting || (screenOn && hasWidgets)) {
+                        refreshForWidgetSuspend()
+                    }
                 } catch (e: Exception) {
                     Log.w("BambuVM", "Failed to update widget", e)
                 }
@@ -541,9 +546,18 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
 
         val statusToPass = if (hasValidPrinterStatus) _printerStatus.value else null
 
+        if (statusToPass != null && !userDisconnected) {
+            org.cygnusx1.openbu.notification.PrintProgressNotificationManager.updateFromStatus(
+                context = app,
+                status = statusToPass,
+                printerName = curName,
+            )
+        } else if (userDisconnected) {
+            org.cygnusx1.openbu.notification.PrintProgressNotificationManager.cancel(app)
+        }
+
         org.cygnusx1.openbu.widget.PrinterWidgetProvider.updateAll(
             context = app,
-            rawBitmap = _frame.value,
             status = statusToPass,
             printerName = curName,
             isConnected = isConnected,
@@ -831,13 +845,18 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
             launch {
                 mqtt.printerStatus.collect { status ->
                     if (mqtt.hasPrintStatus.value) {
-                        val prevState = _printerStatus.value.gcodeState
-                        val prevPercent = _printerStatus.value.mcPercent
+                        val prev = _printerStatus.value
                         _printerStatus.value = status
                         hasValidPrinterStatus = true
                         val now = System.currentTimeMillis()
                         lastReportAtMs = now
-                        if (status.gcodeState != prevState || status.mcPercent != prevPercent || now - lastWidgetUpdateMs > 10_000L) {
+                        val progressChanged = status.gcodeState != prev.gcodeState ||
+                            status.mcPercent != prev.mcPercent ||
+                            status.stgCur != prev.stgCur ||
+                            status.layerNum != prev.layerNum ||
+                            status.mcRemainingTime != prev.mcRemainingTime ||
+                            status.subtaskName != prev.subtaskName
+                        if (progressChanged || now - lastWidgetUpdateMs > 10_000L) {
                             lastWidgetUpdateMs = now
                             triggerWidgetUpdate()
                         }

@@ -773,6 +773,7 @@ class BambuMqttClient(
         val layerNum = if (print.has("layer_num")) print.optInt("layer_num") else current.layerNum
         val totalLayerNum = if (print.has("total_layer_num")) print.optInt("total_layer_num") else current.totalLayerNum
         val mcRemainingTime = if (print.has("mc_remaining_time")) print.optInt("mc_remaining_time") else current.mcRemainingTime
+        val stgCur = if (print.has("stg_cur")) print.optInt("stg_cur", -1) else current.stgCur
         val nozzleTemper = if (print.has("nozzle_temper")) print.optDouble("nozzle_temper").toFloat() else current.nozzleTemper
         val nozzleTarget = if (print.has("nozzle_target_temper")) print.optDouble("nozzle_target_temper").toFloat() else current.nozzleTargetTemper
         val bedTemper = if (print.has("bed_temper")) print.optDouble("bed_temper").toFloat() else current.bedTemper
@@ -978,6 +979,7 @@ class BambuMqttClient(
             layerNum = layerNum,
             totalLayerNum = totalLayerNum,
             mcRemainingTime = mcRemainingTime,
+            stgCur = stgCur,
             nozzleTemper = nozzleTemper,
             nozzleTargetTemper = nozzleTarget,
             bedTemper = bedTemper,

@@ -226,10 +226,10 @@
     <string name="ams_slot">AMS Slot</string>
     <string name="preview">Preview</string>
     <string name="printer_not_connected_warning">Printer is not connected. Please connect first.</string>
-    <string name="widget_title">Printer Status</string>
-    <string name="widget_description">Live snapshot, print progress, and status</string>
-    <string name="widget_refresh_interval">Widget Snapshot Interval</string>
-    <string name="widget_refresh_interval_desc">How often the home screen widget refreshes camera snapshot and print stats</string>
+    <string name="widget_title">Print Progress</string>
+    <string name="widget_description">Live print completion, stage, ETA, layer progress, and quick stream launch</string>
+    <string name="widget_refresh_interval">Background Progress Refresh</string>
+    <string name="widget_refresh_interval_desc">How often the progress widget and print notification poll when in the background</string>
     <string name="seconds_15">15 seconds</string>
     <string name="seconds_30">30 seconds</string>
     <string name="seconds_60">60 seconds</string>

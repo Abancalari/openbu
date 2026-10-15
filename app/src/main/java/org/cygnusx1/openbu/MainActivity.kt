@@ -69,12 +69,19 @@ import org.cygnusx1.openbu.viewmodel.BambuStreamViewModel
 import org.cygnusx1.openbu.viewmodel.ConnectionState
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        const val ACTION_OPEN_STREAM = "org.cygnusx1.openbu.ACTION_OPEN_STREAM"
+        const val ACTION_OPEN_PIP = "org.cygnusx1.openbu.ACTION_OPEN_PIP"
+    }
+
     private var viewModelRef: BambuStreamViewModel? = null
     private var volumeDownPressTime = 0L
 
     var isInPipMode by mutableStateOf(false)
         private set
     private var hasActiveStream: Boolean = false
+    private var pendingOpenStream by mutableStateOf(false)
+    private var pendingOpenPip by mutableStateOf(false)
 
     override fun onPictureInPictureModeChanged(
         isInPictureInPictureMode: Boolean,
@@ -148,7 +155,20 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleStreamActionIntent(intent)
         handleIncomingFileIntent(intent, viewModelRef)
+    }
+
+    private fun handleStreamActionIntent(intent: Intent?) {
+        val action = intent?.action ?: return
+        if (action == ACTION_OPEN_STREAM) {
+            intent.action = null
+            pendingOpenStream = true
+        } else if (action == ACTION_OPEN_PIP) {
+            intent.action = null
+            pendingOpenStream = true
+            pendingOpenPip = true
+        }
     }
 
     private fun handleIncomingFileIntent(intent: Intent?, vm: BambuStreamViewModel?) {
@@ -211,6 +231,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+        }
+        handleStreamActionIntent(intent)
 
         setContent {
             val viewModel: BambuStreamViewModel = viewModel()
@@ -419,9 +445,33 @@ class MainActivity : ComponentActivity() {
                 val skipObjectsError by viewModel.skipObjectsError.collectAsState()
                 val skipObjectsPlateImage by viewModel.skipObjectsPlateImage.collectAsState()
 
-                LaunchedEffect(frame, internalRtspPlayer, rtspPlayer, externalVlcContent, isConnected) {
+                LaunchedEffect(frame, internalRtspPlayer, rtspPlayer, externalVlcContent, isConnected, pendingOpenStream, pendingOpenPip, internalRtspUrl) {
                     val hasStream = isConnected && (frame != null || internalRtspPlayer != null || rtspPlayer != null || externalVlcContent != null)
                     updatePipParams(hasStream)
+
+                    if (pendingOpenStream && isConnected) {
+                        showSettings = false
+                        showGeneralSettings = false
+                        showRelaySettings = false
+                        showDebuggingSettings = false
+                        showPrinterSettings = false
+                        showFileManager = false
+                        showTimelapse = false
+                        showSkipObjects = false
+                        if (internalRtspUrl.isNotBlank()) {
+                            showInternalRtspFullscreen = true
+                            showFullscreen = false
+                        } else {
+                            showFullscreen = true
+                            showInternalRtspFullscreen = false
+                        }
+                        pendingOpenStream = false
+                    }
+
+                    if (pendingOpenPip && hasStream) {
+                        pendingOpenPip = false
+                        enterPip()
+                    }
                 }
 
                 if (isInPipMode) {
