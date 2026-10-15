@@ -44,6 +44,7 @@ class BambuMqttClient(
     // (one slot is often held by OrcaSlicer) and get the new connection dropped.
     private val clientId: String = "openbu_${System.currentTimeMillis()}",
     private val rawSocketFactory: ((String, Int) -> Socket)? = null,
+    initialStatus: PrinterStatus = PrinterStatus(),
 ) {
     private val _lightOn = MutableStateFlow<Boolean?>(null)
     val lightOn: StateFlow<Boolean?> = _lightOn.asStateFlow()
@@ -63,8 +64,12 @@ class BambuMqttClient(
     private val _connectionError = MutableStateFlow<String?>(null)
     val connectionError: StateFlow<String?> = _connectionError.asStateFlow()
 
-    private val _printerStatus = MutableStateFlow(PrinterStatus())
+    private val _printerStatus = MutableStateFlow(initialStatus)
     val printerStatus: StateFlow<PrinterStatus> = _printerStatus.asStateFlow()
+
+    // Flips true once a report carrying real print/temperature telemetry has been parsed.
+    private val _hasPrintStatus = MutableStateFlow(false)
+    val hasPrintStatus: StateFlow<Boolean> = _hasPrintStatus.asStateFlow()
 
     // Flips true once a PUBLISH is received on our subscribed device/<serial>/report topic.
     // The broker only delivers messages for the exact serial we subscribed to (and drops the
@@ -93,6 +98,7 @@ class BambuMqttClient(
         // different printer family doesn't inherit the previous printer's latch.
         usesExtruderSnow = false
         scope.launch(Dispatchers.IO) {
+            var keepAliveJob: kotlinx.coroutines.Job? = null
             try {
                 if (debugLogging) Log.d(TAG, "Connecting to MQTT broker at $ip:8883, serial: $serialNumber")
                 val sslSocket = createSslConnection()
@@ -103,8 +109,10 @@ class BambuMqttClient(
 
                 // MQTT CONNECT — send as single write
                 val connectPacket = buildConnectPacket(clientId, "bblp", accessCode)
-                out.write(connectPacket)
-                out.flush()
+                synchronized(out) {
+                    out.write(connectPacket)
+                    out.flush()
+                }
                 if (debugLogging) Log.d(TAG, "Sent CONNECT packet (${connectPacket.size} bytes)")
 
                 // Read CONNACK
@@ -130,8 +138,10 @@ class BambuMqttClient(
                 // SUBSCRIBE to report topic — send as single write
                 val reportTopic = "device/$serialNumber/report"
                 val subscribePacket = buildSubscribePacket(1, reportTopic)
-                out.write(subscribePacket)
-                out.flush()
+                synchronized(out) {
+                    out.write(subscribePacket)
+                    out.flush()
+                }
                 if (debugLogging) Log.d(TAG, "Sent SUBSCRIBE to $reportTopic")
 
                 // Read SUBACK
@@ -149,6 +159,31 @@ class BambuMqttClient(
                 requestStatus()
                 requestVersion()
 
+                val lastPublishAtMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+
+                // Periodic MQTT PINGREQ (0xC0, 0x00) every 25s keeps the 60s broker keep-alive
+                // and 90s socket read timeout satisfied even when the printer is idle or between reports.
+                keepAliveJob = launch {
+                    while (isActive && _connected.value) {
+                        kotlinx.coroutines.delay(25_000L)
+                        if (!_connected.value) break
+                        try {
+                            synchronized(out) {
+                                out.write(byteArrayOf(0xC0.toByte(), 0x00))
+                                out.flush()
+                            }
+                            if (debugLogging) Log.d(TAG, "Sent MQTT PINGREQ")
+                            if (System.currentTimeMillis() - lastPublishAtMs.get() > 45_000L) {
+                                requestStatus()
+                            }
+                        } catch (e: Exception) {
+                            if (debugLogging) Log.w(TAG, "MQTT keep-alive write failed", e)
+                            closeSocket()
+                            break
+                        }
+                    }
+                }
+
                 // Read loop — process incoming MQTT packets
                 while (coroutineContext.isActive) {
                     val headerByte = input.readByte().toInt() and 0xFF
@@ -159,15 +194,21 @@ class BambuMqttClient(
 
                     when (packetType) {
                         3 -> {                       // PUBLISH
+                            lastPublishAtMs.set(System.currentTimeMillis())
                             // Parse first so printerStatus (incl. the mock flag) reflects this
                             // report before reportReceived flips — consumers gate on both.
                             handlePublish(payload)
                             _reportReceived.value = true
                         }
                         4 -> if (debugLogging) Log.d(TAG, "PUBACK received") // PUBACK
-                        13 -> {                      // PINGREQ
-                            out.write(byteArrayOf(0xD0.toByte(), 0x00))
-                            out.flush()
+                        12 -> {                      // PINGREQ from broker
+                            synchronized(out) {
+                                out.write(byteArrayOf(0xD0.toByte(), 0x00))
+                                out.flush()
+                            }
+                        }
+                        13 -> {                      // PINGRESP from broker
+                            if (debugLogging) Log.d(TAG, "PINGRESP received")
                         }
                         else -> if (debugLogging) Log.d(TAG, "Received MQTT packet type $packetType, len=$remainLen")
                     }
@@ -187,6 +228,7 @@ class BambuMqttClient(
                     }
                 }
             } finally {
+                keepAliveJob?.cancel()
                 _connected.value = false
                 closeSocket()
             }
@@ -554,7 +596,7 @@ class BambuMqttClient(
         return sendCommandDirectly(topic, json.toString())
     }
 
-    private fun requestStatus() {
+    fun requestStatus() {
         val out = socketOutput ?: return
         val json = JSONObject().apply {
             put("pushing", JSONObject().apply {
@@ -954,9 +996,108 @@ class BambuMqttClient(
             hmsErrors = hmsErrors,
         )
         _printerStatus.value = newStatus
+        if (print.has("gcode_state") || print.has("mc_percent") || print.has("nozzle_temper") || print.has("bed_temper")) {
+            _hasPrintStatus.value = true
+        }
 
         if (debugLogging) {
             Log.d(TAG, "PrinterStatus: $newStatus")
+        }
+    }
+
+    /**
+     * One-shot MQTT status fetch for background widget refresh when the main ViewModel is inactive.
+     * Connects, subscribes to report topic, requests pushall, waits up to [timeoutMs] for a telemetry
+     * report, sends MQTT DISCONNECT, and closes the socket cleanly.
+     */
+    suspend fun fetchStatusOnce(timeoutMs: Int = 8_000): PrinterStatus? = withContext(Dispatchers.IO) {
+        var sslSocket: SSLSocket? = null
+        try {
+            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+            })
+            val sslContext = SSLContext.getInstance("TLS")
+            sslContext.init(null, trustAllCerts, java.security.SecureRandom())
+
+            val rawSocket = if (rawSocketFactory != null) {
+                rawSocketFactory.invoke(ip, 8883)
+            } else {
+                Socket().apply { connect(InetSocketAddress(ip, 8883), timeoutMs) }
+            }
+            rawSocket.soTimeout = timeoutMs
+            rawSocket.tcpNoDelay = true
+
+            sslSocket = sslContext.socketFactory.createSocket(rawSocket, ip, 8883, true) as SSLSocket
+            sslSocket.sslParameters = sslSocket.sslParameters.apply {
+                endpointIdentificationAlgorithm = null
+            }
+            sslSocket.startHandshake()
+
+            val input = DataInputStream(sslSocket.inputStream)
+            val out = BufferedOutputStream(sslSocket.outputStream)
+
+            // CONNECT
+            out.write(buildConnectPacket(clientId, "bblp", accessCode))
+            out.flush()
+
+            val connackType = input.readByte().toInt() and 0xFF
+            val connackLen = readRemainingLength(input)
+            val connackData = ByteArray(connackLen)
+            input.readFully(connackData)
+            if ((connackType shr 4) != 2 || (connackData[1].toInt() and 0xFF) != 0) {
+                return@withContext null
+            }
+
+            // SUBSCRIBE
+            val reportTopic = "device/$serialNumber/report"
+            out.write(buildSubscribePacket(1, reportTopic))
+            out.flush()
+
+            val subackType = input.readByte().toInt() and 0xFF
+            val subackLen = readRemainingLength(input)
+            val subackData = ByteArray(subackLen)
+            input.readFully(subackData)
+
+            // Request pushall
+            val pushallJson = JSONObject().apply {
+                put("pushing", JSONObject().apply {
+                    put("sequence_id", "0")
+                    put("command", "pushall")
+                })
+            }
+            out.write(buildPublishPacket("device/$serialNumber/request", pushallJson.toString()))
+            out.flush()
+
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (System.currentTimeMillis() < deadline) {
+                val headerByte = input.readByte().toInt() and 0xFF
+                val packetType = headerByte shr 4
+                val remainLen = readRemainingLength(input)
+                val payload = ByteArray(remainLen)
+                input.readFully(payload)
+
+                if (packetType == 3) {
+                    handlePublish(payload)
+                    if (_hasPrintStatus.value) {
+                        break
+                    }
+                }
+            }
+
+            // Clean MQTT DISCONNECT (0xE0, 0x00) so broker frees the session slot immediately
+            try {
+                out.write(byteArrayOf(0xE0.toByte(), 0x00))
+                out.flush()
+            } catch (_: Exception) {}
+
+            if (_hasPrintStatus.value) _printerStatus.value else null
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchStatusOnce failed: ${e.message}")
+            null
+        } finally {
+            try { sslSocket?.close() } catch (_: Exception) {}
         }
     }
 

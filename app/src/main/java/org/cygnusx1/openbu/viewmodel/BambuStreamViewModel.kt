@@ -254,17 +254,15 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
     private var reconnectJob: Job? = null
     private var reconnectRetryCount = 0
     private val maxReconnectRetries = 5
-    // No connection path auto-retries any more: every attempt — manual entry, auto-discovered/
-    // saved printer, or a dashboard drop/stale-socket reconnect — makes a single attempt and then
-    // surfaces a Retry button (ConnectionScreen) or Reconnect button (Dashboard) for the user to
-    // tap, rather than looping on its own. This is the same one-shot behaviour manual entry always
-    // had; it now applies everywhere. (maxReconnectRetries is still used for the camera-only MJPEG
-    // substream retry, which is independent of the MQTT connection.)
     private var isManualConnection = false
     private val effectiveMaxRetries: Int
-        get() = 0
+        get() = if (isManualConnection) 0 else maxReconnectRetries
     private var mjpegRetryCount = 0
     private var mjpegRetryJob: Job? = null
+    private var mqttRetryCount = 0
+    private var mqttRetryJob: Job? = null
+    @Volatile private var hasValidPrinterStatus = false
+    @Volatile private var lastWidgetUpdateMs = 0L
 
     // Timestamp of the last MQTT status report. Used on resume to tell a live connection from one
     // that's nominally "Connected" but whose socket silently died while the app was backgrounded.
@@ -359,12 +357,15 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
         _useVlcForRtsp.value = prefs.getBoolean("use_vlc_rtsp", false)
         _widgetRefreshInterval.value = prefs.getInt("widget_refresh_interval", 30)
 
+        org.cygnusx1.openbu.widget.PrinterWidgetProvider.activeViewModel = java.lang.ref.WeakReference(this)
+        org.cygnusx1.openbu.widget.PrinterWidgetProvider.schedulePeriodicRefresh(application, _widgetRefreshInterval.value)
+
         viewModelScope.launch(Dispatchers.Default) {
             while (isActive) {
                 val interval = _widgetRefreshInterval.value.coerceIn(15, 60)
                 delay(interval * 1000L)
                 try {
-                    triggerWidgetUpdate()
+                    refreshForWidgetSuspend()
                 } catch (e: Exception) {
                     Log.w("BambuVM", "Failed to update widget", e)
                 }
@@ -457,20 +458,93 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
     fun setWidgetRefreshInterval(seconds: Int) {
         _widgetRefreshInterval.value = seconds
         prefs.edit().putInt("widget_refresh_interval", seconds).apply()
+        org.cygnusx1.openbu.widget.PrinterWidgetProvider.schedulePeriodicRefresh(getApplication(), seconds)
         triggerWidgetUpdate()
+    }
+
+    /**
+     * Ensures the MQTT/camera connection is healthy (healing it if stale or disconnected),
+     * updates the widget, and returns true if the ViewModel currently has an active connection.
+     */
+    suspend fun refreshForWidgetSuspend(): Boolean {
+        if (userDisconnected || !_hasLastConnectedPrinter.value) {
+            triggerWidgetUpdate()
+            return true
+        }
+        val now = System.currentTimeMillis()
+        val reportAgeMs = now - lastReportAtMs
+        val mqttDown = !_isMqttConnected.value
+        val stale = reportAgeMs > mqttStaleMs
+
+        if (_connectionState.value != ConnectionState.Connected || mqttDown || stale) {
+            Log.d("AutoReconnect", "refreshForWidgetSuspend: healing connection (state=${_connectionState.value}, mqttDown=$mqttDown, stale=$stale)")
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                if (_connectionState.value == ConnectionState.Connected && mqttDown && !stale) {
+                    scheduleMqttReconnect(immediate = true)
+                } else {
+                    retryIfNeeded()
+                }
+            }
+            var waited = 0L
+            while (waited < 4500L && (!_isMqttConnected.value || (System.currentTimeMillis() - lastReportAtMs > mqttStaleMs))) {
+                delay(250L)
+                waited += 250L
+            }
+        } else if (reportAgeMs > 12_000L) {
+            mqttClient?.requestStatus()
+            delay(500L)
+        }
+
+        triggerWidgetUpdate()
+        return _connectionState.value == ConnectionState.Connected && _isMqttConnected.value
     }
 
     fun triggerWidgetUpdate() {
         val app = getApplication<Application>()
-        val isConnected = _connectionState.value == ConnectionState.Connected
-        val curSerial = _connectedSerialNumber.value
-        val curName = (discoveredPrinters.value.firstOrNull { it.serialNumber == curSerial }?.deviceName
-            ?: savedPrinters.value.firstOrNull { it.serialNumber == curSerial }?.deviceName)
-            ?.ifBlank { "Bambu Lab" } ?: "Bambu Lab"
+        val curSerial = _connectedSerialNumber.value.ifBlank {
+            prefs.getString("last_connected_serial", "") ?: ""
+        }
+        val curIp = _connectedIp.value.ifBlank {
+            prefs.getString("last_connected_ip", "") ?: ""
+        }
+        val curCode = _connectedAccessCode.value.ifBlank {
+            if (curSerial.isNotBlank()) getSavedAccessCode(curSerial) else ""
+        }
+        val customName = _customPrinterName.value.ifBlank {
+            if (curSerial.isNotBlank()) prefs.getString("custom_name_$curSerial", "") ?: "" else ""
+        }
+        val curName = customName.ifBlank {
+            discoveredPrinters.value.firstOrNull { it.serialNumber == curSerial }?.deviceName
+                ?: savedPrinters.value.firstOrNull { it.serialNumber == curSerial }?.deviceName
+                ?: if (curSerial.isNotBlank()) prefs.getString("saved_name_$curSerial", null) else null
+        }?.ifBlank { "Bambu Lab" } ?: "Bambu Lab"
+
+        if (curIp.isNotBlank() && curSerial.isNotBlank() && curCode.isNotBlank()) {
+            org.cygnusx1.openbu.widget.PrinterWidgetProvider.cacheConnectionParams(
+                context = app,
+                ip = curIp,
+                serialNumber = curSerial,
+                accessCode = curCode,
+                mqttClientId = mqttClientId,
+                usesMjpeg = usesMjpegCamera(curSerial),
+                printerName = curName,
+                refreshIntervalSec = _widgetRefreshInterval.value,
+            )
+        }
+
+        val isConnected: Boolean? = when {
+            userDisconnected -> false
+            _connectionState.value == ConnectionState.Connected || _isMqttConnected.value -> true
+            _isReconnecting.value || _connectionState.value == ConnectionState.Connecting || mqttRetryJob?.isActive == true -> null
+            else -> null // Let direct polling decide offline after consecutive failures rather than flashing OFFLINE on transient drop
+        }
+
+        val statusToPass = if (hasValidPrinterStatus) _printerStatus.value else null
+
         org.cygnusx1.openbu.widget.PrinterWidgetProvider.updateAll(
             context = app,
             rawBitmap = _frame.value,
-            status = _printerStatus.value,
+            status = statusToPass,
             printerName = curName,
             isConnected = isConnected,
         )
@@ -539,11 +613,19 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
+        // If switching to a different printer, clear previous printer status
+        if (_connectedSerialNumber.value.isNotBlank() && _connectedSerialNumber.value != serialNumber) {
+            _printerStatus.value = PrinterStatus()
+            hasValidPrinterStatus = false
+        }
+
         // Clean up any stale stream/MQTT from a previous connection
         streamJob?.cancel()
         streamJob = null
         mqttJob?.cancel()
         mqttJob = null
+        mqttRetryJob?.cancel()
+        mqttRetryJob = null
         val oldCam = client
         val oldMqtt = mqttClient
         client = null
@@ -556,6 +638,8 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         userDisconnected = false
+        getApplication<Application>().getSharedPreferences("printer_widget_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("user_disconnected", false).apply()
         reconnectJob?.cancel()
         reconnectJob = null
         // Note: the printer (credentials + saved list) is only persisted once the
@@ -631,7 +715,6 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
                         if (mjpegRetryCount > 0) {
                             _mjpegCameraFailed.value = true
                         }
-                        _frame.value = null
                         _fps.value = 0f
                         if (_isMqttConnected.value || ftpClient != null || mqttClient != null) {
                             // MQTT connected, connecting, or FTP active — only retry the camera stream
@@ -653,18 +736,50 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
 
         // Start MQTT in separate coroutine (non-fatal)
         mqttEverConnected = false
-        val mqtt = BambuMqttClient(ip, accessCode, serialNumber, clientId = mqttClientId, rawSocketFactory = proxySocketFactory(proxyConfig))
+        mqttRetryCount = 0
+        startMqttConnection(ip, accessCode, serialNumber, proxyConfig)
+    }
+
+    private fun startMqttConnection(
+        ip: String,
+        accessCode: String,
+        serialNumber: String,
+        proxyConfig: ProxyConfig?,
+    ) {
+        mqttJob?.cancel()
+        mqttJob = null
+        val oldMqtt = mqttClient
+        mqttClient = null
+        if (oldMqtt != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                oldMqtt.close()
+            }
+        }
+
+        val mqtt = BambuMqttClient(
+            ip = ip,
+            accessCode = accessCode,
+            serialNumber = serialNumber,
+            clientId = mqttClientId,
+            rawSocketFactory = proxySocketFactory(proxyConfig),
+            initialStatus = _printerStatus.value,
+        )
         mqtt.debugLogging = _debugLogging.value
         mqttClient = mqtt
         mqtt.connect(viewModelScope)
 
         mqttJob = viewModelScope.launch {
             launch {
+                var wasConnected = false
                 mqtt.connected.collect {
                     _isMqttConnected.value = it
-                    if (it) mqttEverConnected = true
+                    if (it) {
+                        wasConnected = true
+                        mqttEverConnected = true
+                        mqttRetryCount = 0
+                    }
                     // Mark connected once MQTT is up (for all printer types)
-                    if (it && _connectionState.value == ConnectionState.Connecting) {
+                    if (it && _connectionState.value != ConnectionState.Connected) {
                         _connectionState.value = ConnectionState.Connected
                         _hasLastConnectedPrinter.value = true
                         // Once connected, a later drop should auto-retry like any other
@@ -673,35 +788,38 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
                         _isReconnecting.value = false
                         _noRouteToHost.value = null
                         reconnectRetryCount = 0
-                        // Saving is deferred to the reportReceived collector: a CONNACK only
-                        // proves the access code; the serial isn't validated until a report
-                        // arrives on device/<serial>/report.
+                    } else if (!it && wasConnected && !userDisconnected) {
+                        Log.d("AutoReconnect", "MQTT disconnected after being up, scheduling MQTT reconnect")
+                        scheduleMqttReconnect()
                     }
                 }
             }
             launch {
                 mqtt.connectionError.collect { error ->
                     if (error != null && !userDisconnected) {
-                        Log.d("AutoReconnect", "MQTT error: $error")
-                        if (error == "EHOSTUNREACH") {
-                            // "EHOSTUNREACH" is an internal signal, not user-facing text.
-                            // Show the same friendly message setNoRouteToHost uses on the
-                            // dashboard, since this path routes to the ConnectionScreen.
-                            setNoRouteToHost(ip)
-                            _errorMessage.value = noRouteToHostMessage(ip)
-                        } else {
-                            _errorMessage.value = error
-                        }
-                        _connectionState.value = ConnectionState.Error
-                        _hasLastConnectedPrinter.value = false
-                        cleanupConnections()
+                        Log.d("AutoReconnect", "MQTT error: $error, mqttEverConnected=$mqttEverConnected")
                         if (error.contains("rejected", ignoreCase = true)) {
                             // Auth failure — clear saved credentials so we don't auto-retry
+                            _errorMessage.value = error
+                            _connectionState.value = ConnectionState.Error
+                            _hasLastConnectedPrinter.value = false
+                            cleanupConnections()
                             prefs.edit()
                                 .remove("last_connected_serial")
                                 .remove("last_connected_ip")
                                 .apply()
+                        } else if (mqttEverConnected || _connectionState.value == ConnectionState.Connected) {
+                            // Transient drop on an already-established session — retry MQTT in background
+                            scheduleMqttReconnect()
                         } else {
+                            if (error == "EHOSTUNREACH") {
+                                setNoRouteToHost(ip)
+                                _errorMessage.value = noRouteToHostMessage(ip)
+                            } else {
+                                _errorMessage.value = error
+                            }
+                            _connectionState.value = ConnectionState.Error
+                            cleanupConnections()
                             scheduleReconnect()
                         }
                     }
@@ -711,9 +829,19 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
                 mqtt.lightOn.collect { _isLightOn.value = it }
             }
             launch {
-                mqtt.printerStatus.collect {
-                    _printerStatus.value = it
-                    lastReportAtMs = System.currentTimeMillis()
+                mqtt.printerStatus.collect { status ->
+                    if (mqtt.hasPrintStatus.value) {
+                        val prevState = _printerStatus.value.gcodeState
+                        val prevPercent = _printerStatus.value.mcPercent
+                        _printerStatus.value = status
+                        hasValidPrinterStatus = true
+                        val now = System.currentTimeMillis()
+                        lastReportAtMs = now
+                        if (status.gcodeState != prevState || status.mcPercent != prevPercent || now - lastWidgetUpdateMs > 10_000L) {
+                            lastWidgetUpdateMs = now
+                            triggerWidgetUpdate()
+                        }
+                    }
                 }
             }
             launch {
@@ -733,9 +861,32 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
                         } else {
                             saveCurrentPrinter()
                         }
+                        triggerWidgetUpdate()
                     }
                 }
             }
+        }
+    }
+
+    private fun scheduleMqttReconnect(immediate: Boolean = false) {
+        if (userDisconnected) return
+        val ip = _connectedIp.value.ifBlank { prefs.getString("last_connected_ip", "") ?: "" }
+        val serial = _connectedSerialNumber.value.ifBlank { prefs.getString("last_connected_serial", "") ?: "" }
+        val code = _connectedAccessCode.value.ifBlank { if (serial.isNotBlank()) getSavedAccessCode(serial) else "" }
+        if (ip.isBlank() || code.isBlank() || serial.isBlank()) return
+        if (!immediate && mqttRetryCount >= maxReconnectRetries) {
+            Log.d("AutoReconnect", "scheduleMqttReconnect: max immediate retries reached, will retry on next widget/resume cycle")
+            return
+        }
+        if (!immediate) mqttRetryCount++ else mqttRetryCount = 1
+        mqttRetryJob?.cancel()
+        mqttRetryJob = viewModelScope.launch {
+            if (!immediate) {
+                delay(3000L * mqttRetryCount.coerceAtMost(3))
+            }
+            if (userDisconnected || _isMqttConnected.value) return@launch
+            Log.d("AutoReconnect", "scheduleMqttReconnect: reconnecting MQTT (attempt $mqttRetryCount)")
+            startMqttConnection(ip, code, serial, effectiveProxyConfig(serial))
         }
     }
 
@@ -922,6 +1073,8 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
         streamJob = null
         mjpegRetryJob?.cancel()
         mjpegRetryJob = null
+        mqttRetryJob?.cancel()
+        mqttRetryJob = null
         mqttJob?.cancel()
         mqttJob = null
         val cam = client
@@ -932,7 +1085,6 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
             cam?.close()
             mqtt?.close()
         }
-        _frame.value = null
         _fps.value = 0f
         _isLightOn.value = null
         _isMqttConnected.value = false
@@ -942,9 +1094,15 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun fullCleanup() {
         cleanupConnections()
+        _frame.value = null
+        _printerStatus.value = PrinterStatus()
+        hasValidPrinterStatus = false
         mjpegRetryJob?.cancel()
         mjpegRetryJob = null
         mjpegRetryCount = 0
+        mqttRetryJob?.cancel()
+        mqttRetryJob = null
+        mqttRetryCount = 0
         _connectedSerialNumber.value = ""
         _connectedIp.value = ""
         _connectedAccessCode.value = ""
@@ -1016,7 +1174,6 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
                 throw e
             } catch (e: Exception) {
                 if (!userDisconnected) {
-                    _frame.value = null
                     _fps.value = 0f
                     scheduleMjpegRetry()
                 }
@@ -1097,6 +1254,9 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
         reconnectJob?.cancel()
         reconnectJob = null
         cleanupConnections()
+        _frame.value = null
+        _printerStatus.value = PrinterStatus()
+        hasValidPrinterStatus = false
         _rtspReconnectKey.value++
         reconnectRetryCount = 0
         mjpegRetryCount = 0
@@ -1176,6 +1336,9 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
         // Clear last-connected so we don't auto-reconnect next launch
         prefs.edit().remove("last_connected_serial").remove("last_connected_ip").apply()
         _hasLastConnectedPrinter.value = false
+        getApplication<Application>().getSharedPreferences("printer_widget_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("user_disconnected", true).putBoolean("is_connected", false).apply()
+        triggerWidgetUpdate()
     }
 
     private val _demoMode = MutableStateFlow(false)

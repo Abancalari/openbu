@@ -86,6 +86,7 @@
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="org.cygnusx1.openbu.widget.ACTION_REFRESH_WIDGET" />
+                <action android:name="org.cygnusx1.openbu.widget.ACTION_AUTO_REFRESH_WIDGET" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
