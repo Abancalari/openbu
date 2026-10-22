@@ -1,5 +1,6 @@
 package org.cygnusx1.openbu.ui
 
+import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
@@ -16,6 +17,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -65,6 +67,8 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -87,11 +91,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -111,6 +117,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.CompositionLocalProvider
@@ -185,6 +192,11 @@ fun DashboardScreen(
     var showAuxFanDialog by remember { mutableStateOf(false) }
     var showChamberFanDialog by remember { mutableStateOf(false) }
     var filamentEditTarget by remember { mutableStateOf<FilamentEditTarget?>(null) }
+    val dashboardPrefs = remember { context.getSharedPreferences("dashboard_prefs", Context.MODE_PRIVATE) }
+    var splitFraction by remember {
+        mutableFloatStateOf(dashboardPrefs.getFloat("landscape_split_ratio", 0.62f).coerceIn(0.20f, 0.85f))
+    }
+    var isDraggingSplitter by remember { mutableStateOf(false) }
 
     filamentEditTarget?.let { target ->
         FilamentEditDialog(
@@ -593,60 +605,170 @@ fun DashboardScreen(
             }
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Two-pane landscape layout: Video on the left, Assets on the right
-            Row(
+            // Two-pane landscape layout with adjustable divider: Video on left, Assets on right
+            BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                // Left pane: Video feed and Chamber light
-                Column(
-                    modifier = Modifier
-                        .weight(1.15f)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    DashboardMediaSection(
-                        showMainStream = showMainStream,
-                        internalRtspPlayer = internalRtspPlayer,
-                        frame = frame,
-                        fps = fps,
-                        isRelayed = isRelayed,
-                        rtspPlayer = rtspPlayer,
-                        externalVlcContent = externalVlcContent,
-                        isLightOn = isLightOn,
-                        isMqttConnected = isMqttConnected,
-                        onOpenFullscreen = onOpenFullscreen,
-                        onOpenInternalRtspFullscreen = onOpenInternalRtspFullscreen,
-                        onOpenRtspFullscreen = onOpenRtspFullscreen,
-                        onEnterPip = onEnterPip,
-                        onToggleLight = onToggleLight,
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
+                val totalWidthPx = constraints.maxWidth.toFloat()
+                val totalWidthDp = maxWidth
+                val dividerTouchWidth = 24.dp
+                val availableContentWidth = (totalWidthDp - dividerTouchWidth).coerceAtLeast(0.dp)
+                val leftWidthDp = availableContentWidth * splitFraction
+                val rightWidthDp = availableContentWidth * (1f - splitFraction)
 
-                // Right pane: Assets (Print status, temps & fans, AMS, external spool)
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState()),
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.Top,
                 ) {
-                    DashboardAssetsSection(
-                        printerStatus = printerStatus,
-                        series = series,
-                        isEnclosed = isEnclosed,
-                        isLandscape = true,
-                        onPrinterActionCommand = onPrinterActionCommand,
-                        onShowNozzleDialog = { showNozzleDialog = true },
-                        onShowBedDialog = { showBedDialog = true },
-                        onShowPartFanDialog = { showPartFanDialog = true },
-                        onShowAuxFanDialog = { showAuxFanDialog = true },
-                        onShowChamberFanDialog = { showChamberFanDialog = true },
-                        onEditFilament = { filamentEditTarget = it },
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
+                    // Left pane: Video feed and Chamber light
+                    Column(
+                        modifier = Modifier
+                            .width(leftWidthDp)
+                            .fillMaxHeight()
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        DashboardMediaSection(
+                            showMainStream = showMainStream,
+                            internalRtspPlayer = internalRtspPlayer,
+                            frame = frame,
+                            fps = fps,
+                            isRelayed = isRelayed,
+                            rtspPlayer = rtspPlayer,
+                            externalVlcContent = externalVlcContent,
+                            isLightOn = isLightOn,
+                            isMqttConnected = isMqttConnected,
+                            onOpenFullscreen = onOpenFullscreen,
+                            onOpenInternalRtspFullscreen = onOpenInternalRtspFullscreen,
+                            onOpenRtspFullscreen = onOpenRtspFullscreen,
+                            onEnterPip = onEnterPip,
+                            onToggleLight = onToggleLight,
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+
+                    // Draggable vertical divider with touch handle and visual affordance
+                    Box(
+                        modifier = Modifier
+                            .width(dividerTouchWidth)
+                            .fillMaxHeight()
+                            .pointerInput(totalWidthPx) {
+                                detectHorizontalDragGestures(
+                                    onDragStart = {
+                                        isDraggingSplitter = true
+                                    },
+                                    onDragEnd = {
+                                        isDraggingSplitter = false
+                                        dashboardPrefs.edit().putFloat("landscape_split_ratio", splitFraction).apply()
+                                    },
+                                    onDragCancel = {
+                                        isDraggingSplitter = false
+                                    },
+                                    onHorizontalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        if (totalWidthPx > 0f) {
+                                            val delta = dragAmount / totalWidthPx
+                                            splitFraction = (splitFraction + delta).coerceIn(0.20f, 0.85f)
+                                        }
+                                    }
+                                )
+                            }
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onDoubleTap = {
+                                        splitFraction = 0.62f
+                                        dashboardPrefs.edit().putFloat("landscape_split_ratio", 0.62f).apply()
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        // Vertical guide line
+                        Box(
+                            modifier = Modifier
+                                .width(2.dp)
+                                .fillMaxHeight()
+                                .background(
+                                    if (isDraggingSplitter) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                                    else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                )
+                        )
+
+                        // Centered grab handle pill
+                        Surface(
+                            modifier = Modifier
+                                .width(if (isDraggingSplitter) 8.dp else 6.dp)
+                                .height(64.dp),
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (isDraggingSplitter) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            tonalElevation = if (isDraggingSplitter) 6.dp else 2.dp,
+                            shadowElevation = if (isDraggingSplitter) 4.dp else 1.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                repeat(3) { index ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(width = 3.dp, height = 3.dp)
+                                            .background(
+                                                color = if (isDraggingSplitter) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.surface,
+                                                shape = CircleShape
+                                            )
+                                    )
+                                    if (index < 2) Spacer(modifier = Modifier.height(4.dp))
+                                }
+                            }
+                        }
+
+                        // Percentage badge tooltip when actively dragging
+                        if (isDraggingSplitter) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 12.dp)
+                                    .background(
+                                        color = MaterialTheme.colorScheme.inverseSurface,
+                                        shape = RoundedCornerShape(6.dp)
+                                    )
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "${(splitFraction * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                                )
+                            }
+                        }
+                    }
+
+                    // Right pane: Assets (Print status, temps & fans, AMS, external spool)
+                    Column(
+                        modifier = Modifier
+                            .width(rightWidthDp)
+                            .fillMaxHeight()
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        DashboardAssetsSection(
+                            printerStatus = printerStatus,
+                            series = series,
+                            isEnclosed = isEnclosed,
+                            isLandscape = true,
+                            paneWidthDp = rightWidthDp,
+                            onPrinterActionCommand = onPrinterActionCommand,
+                            onShowNozzleDialog = { showNozzleDialog = true },
+                            onShowBedDialog = { showBedDialog = true },
+                            onShowPartFanDialog = { showPartFanDialog = true },
+                            onShowAuxFanDialog = { showAuxFanDialog = true },
+                            onShowChamberFanDialog = { showChamberFanDialog = true },
+                            onEditFilament = { filamentEditTarget = it },
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
                 }
             }
         } else {
@@ -932,6 +1054,7 @@ private fun DashboardAssetsSection(
     series: PrinterSeries,
     isEnclosed: Boolean,
     isLandscape: Boolean,
+    paneWidthDp: Dp? = null,
     onPrinterActionCommand: (String) -> Unit,
     onShowNozzleDialog: () -> Unit,
     onShowBedDialog: () -> Unit,
@@ -991,8 +1114,15 @@ private fun DashboardAssetsSection(
             onClick = onShowChamberFanDialog,
         )
     }
-    // In landscape (or with >5 cards), keep to rows of 3 to avoid cramped items.
-    val cardsPerRow = if (isLandscape || statusCards.size > 5) 3 else statusCards.size
+    // In landscape, dynamically choose cards per row based on the adjustable pane width
+    val cardsPerRow = if (isLandscape) {
+        when {
+            paneWidthDp != null && paneWidthDp < 260.dp -> 1
+            paneWidthDp != null && paneWidthDp < 460.dp -> 2
+            paneWidthDp != null && paneWidthDp >= 750.dp -> if (statusCards.size > 5) 6 else statusCards.size
+            else -> 3
+        }
+    } else if (statusCards.size > 5) 3 else statusCards.size
     statusCards.chunked(cardsPerRow).forEachIndexed { rowIndex, rowCards ->
         if (rowIndex > 0) Spacer(modifier = Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1163,12 +1293,19 @@ private fun PrintStatusCard(
                     text = stateLabel,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f, fill = false),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 if (timeText.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = timeText,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.End,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -1238,6 +1375,7 @@ private fun PrintStatusCard(
                             FilledTonalButton(
                                 onClick = { onPrinterActionCommand("pause") },
                                 modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 4.dp),
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.Pause,
@@ -1245,12 +1383,13 @@ private fun PrintStatusCard(
                                     modifier = Modifier.size(18.dp),
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(stringResource(R.string.pause))
+                                Text(stringResource(R.string.pause), maxLines = 1)
                             }
                         } else {
                             FilledTonalButton(
                                 onClick = { onPrinterActionCommand("resume") },
                                 modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 4.dp),
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.PlayArrow,
@@ -1258,12 +1397,13 @@ private fun PrintStatusCard(
                                     modifier = Modifier.size(18.dp),
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(stringResource(R.string.resume))
+                                Text(stringResource(R.string.resume), maxLines = 1)
                             }
                         }
                         FilledTonalButton(
                             onClick = { onPrinterActionCommand("stop") },
                             modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 4.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Stop,
@@ -1271,7 +1411,7 @@ private fun PrintStatusCard(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(stringResource(R.string.stop))
+                            Text(stringResource(R.string.stop), maxLines = 1)
                         }
                     }
                 }
