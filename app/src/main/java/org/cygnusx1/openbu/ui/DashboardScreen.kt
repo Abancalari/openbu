@@ -1,6 +1,7 @@
 package org.cygnusx1.openbu.ui
 
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
@@ -172,6 +173,8 @@ fun DashboardScreen(
     onEnterPip: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val series = printerSeriesFromSerial(serialNumber)
     val isEnclosed = series.isEnclosed
     var showSpeedDialog by remember { mutableStateOf(false) }
@@ -498,384 +501,606 @@ fun DashboardScreen(
             .padding(horizontal = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(
-                onClick = { scope.launch { drawerState.open() } },
+        if (isLandscape) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Menu,
-                    contentDescription = stringResource(R.string.cd_menu),
-                    tint = MaterialTheme.colorScheme.onBackground,
-                )
-            }
-            Column(
-                modifier = Modifier.weight(1f),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                    Icon(
+                        imageVector = Icons.Filled.Menu,
+                        contentDescription = stringResource(R.string.cd_menu),
+                        tint = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
                     Text(
                         text = stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
+                    if (printerName.isNotBlank()) {
+                        Text(
+                            text = " • $printerName",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (isReconnecting) {
                         Spacer(modifier = Modifier.width(8.dp))
                         CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp,
                         )
                     }
-                }
-                if (printerName.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = printerName,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (noRouteToHost != null) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = noRouteToHost,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    // We only make a single connection attempt, so surface a Retry button right
-                    // here once it fails rather than leaving it buried in the navigation drawer.
-                    if (!isReconnecting) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        FilledTonalButton(onClick = onReconnect) {
-                            Text(stringResource(R.string.retry))
+                    if (printerStatus.hmsErrors.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(
+                            onClick = { showHmsDialog = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.hms_error_label),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
                         }
                     }
                 }
-                if (mjpegCameraFailed) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.camera_two_connection_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                IconButton(onClick = { showSpeedDialog = true }) {
+                    Icon(
+                        imageVector = Icons.Filled.Speed,
+                        contentDescription = stringResource(R.string.print_speed),
+                        tint = MaterialTheme.colorScheme.onBackground,
                     )
                 }
             }
-            IconButton(onClick = { showSpeedDialog = true }) {
-                Icon(
-                    imageVector = Icons.Filled.Speed,
-                    contentDescription = stringResource(R.string.print_speed),
-                    tint = MaterialTheme.colorScheme.onBackground,
-                )
-            }
-        }
-
-        // HMS errors sit on their own line below the title bar so the long
-        // (debug) app name stays centered without the button overlapping it.
-        if (printerStatus.hmsErrors.isNotEmpty()) {
-            TextButton(onClick = { showHmsDialog = true }) {
-                Text(
-                    text = stringResource(R.string.hms_error_label),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-        // Mini video preview
-        if (showMainStream && internalRtspPlayer == null) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .background(Color.Black)
-                        .clickable { onOpenFullscreen() },
-                    contentAlignment = Alignment.Center,
+            if (noRouteToHost != null || mjpegCameraFailed) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (frame != null) {
-                        Image(
-                            bitmap = frame.asImageBitmap(),
-                            contentDescription = stringResource(R.string.cd_camera_preview),
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit,
-                        )
-                    }
-
-                    // FPS badge
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(8.dp)
-                            .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                    ) {
+                    if (noRouteToHost != null) {
                         Text(
-                            text = stringResource(R.string.fps, fps),
-                            color = Color.White,
-                            fontSize = 12.sp,
+                            text = noRouteToHost,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
                         )
+                        if (!isReconnecting) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            FilledTonalButton(onClick = onReconnect) {
+                                Text(stringResource(R.string.retry))
+                            }
+                        }
                     }
-
-                    // Relayed badge and PiP button
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        if (isRelayed) {
-                            Box(
-                                modifier = Modifier
-                                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.relayed),
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                )
-                            }
-                        }
-                        if (onEnterPip != null) {
-                            IconButton(
-                                onClick = onEnterPip,
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .background(Color.Black.copy(alpha = 0.5f), CircleShape),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.PictureInPictureAlt,
-                                    contentDescription = stringResource(R.string.cd_pip),
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
+                    if (mjpegCameraFailed) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.camera_two_connection_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
                 }
             }
+            Spacer(modifier = Modifier.height(6.dp))
 
-            Spacer(modifier = Modifier.height(VerticalCardPadding))
+            // Two-pane landscape layout: Video on the left, Assets on the right
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                // Left pane: Video feed and Chamber light
+                Column(
+                    modifier = Modifier
+                        .weight(1.15f)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    DashboardMediaSection(
+                        showMainStream = showMainStream,
+                        internalRtspPlayer = internalRtspPlayer,
+                        frame = frame,
+                        fps = fps,
+                        isRelayed = isRelayed,
+                        rtspPlayer = rtspPlayer,
+                        externalVlcContent = externalVlcContent,
+                        isLightOn = isLightOn,
+                        isMqttConnected = isMqttConnected,
+                        onOpenFullscreen = onOpenFullscreen,
+                        onOpenInternalRtspFullscreen = onOpenInternalRtspFullscreen,
+                        onOpenRtspFullscreen = onOpenRtspFullscreen,
+                        onEnterPip = onEnterPip,
+                        onToggleLight = onToggleLight,
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                // Right pane: Assets (Print status, temps & fans, AMS, external spool)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    DashboardAssetsSection(
+                        printerStatus = printerStatus,
+                        series = series,
+                        isEnclosed = isEnclosed,
+                        isLandscape = true,
+                        onPrinterActionCommand = onPrinterActionCommand,
+                        onShowNozzleDialog = { showNozzleDialog = true },
+                        onShowBedDialog = { showBedDialog = true },
+                        onShowPartFanDialog = { showPartFanDialog = true },
+                        onShowAuxFanDialog = { showAuxFanDialog = true },
+                        onShowChamberFanDialog = { showChamberFanDialog = true },
+                        onEditFilament = { filamentEditTarget = it },
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+        } else {
+            // Portrait top bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(
+                    onClick = { scope.launch { drawerState.open() } },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Menu,
+                        contentDescription = stringResource(R.string.cd_menu),
+                        tint = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        if (isReconnecting) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                    }
+                    if (printerName.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = printerName,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (noRouteToHost != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = noRouteToHost,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        // We only make a single connection attempt, so surface a Retry button right
+                        // here once it fails rather than leaving it buried in the navigation drawer.
+                        if (!isReconnecting) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            FilledTonalButton(onClick = onReconnect) {
+                                Text(stringResource(R.string.retry))
+                            }
+                        }
+                    }
+                    if (mjpegCameraFailed) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.camera_two_connection_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                IconButton(onClick = { showSpeedDialog = true }) {
+                    Icon(
+                        imageVector = Icons.Filled.Speed,
+                        contentDescription = stringResource(R.string.print_speed),
+                        tint = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+            }
+
+            // HMS errors sit on their own line below the title bar so the long
+            // (debug) app name stays centered without the button overlapping it.
+            if (printerStatus.hmsErrors.isNotEmpty()) {
+                TextButton(onClick = { showHmsDialog = true }) {
+                    Text(
+                        text = stringResource(R.string.hms_error_label),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                DashboardMediaSection(
+                    showMainStream = showMainStream,
+                    internalRtspPlayer = internalRtspPlayer,
+                    frame = frame,
+                    fps = fps,
+                    isRelayed = isRelayed,
+                    rtspPlayer = rtspPlayer,
+                    externalVlcContent = externalVlcContent,
+                    isLightOn = isLightOn,
+                    isMqttConnected = isMqttConnected,
+                    onOpenFullscreen = onOpenFullscreen,
+                    onOpenInternalRtspFullscreen = onOpenInternalRtspFullscreen,
+                    onOpenRtspFullscreen = onOpenRtspFullscreen,
+                    onEnterPip = onEnterPip,
+                    onToggleLight = onToggleLight,
+                )
+                Spacer(modifier = Modifier.height(VerticalCardPadding))
+                DashboardAssetsSection(
+                    printerStatus = printerStatus,
+                    series = series,
+                    isEnclosed = isEnclosed,
+                    isLandscape = false,
+                    onPrinterActionCommand = onPrinterActionCommand,
+                    onShowNozzleDialog = { showNozzleDialog = true },
+                    onShowBedDialog = { showBedDialog = true },
+                    onShowPartFanDialog = { showPartFanDialog = true },
+                    onShowAuxFanDialog = { showAuxFanDialog = true },
+                    onShowChamberFanDialog = { showChamberFanDialog = true },
+                    onEditFilament = { filamentEditTarget = it },
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+            }
         }
+    }
+    } // Scaffold
+    } // ModalNavigationDrawer
+}
 
-        // Internal RTSP stream (non-P1 printer built-in camera) — always ExoPlayer
-        if (showMainStream && internalRtspPlayer != null) {
-            RtspStreamCard(player = internalRtspPlayer, onClick = onOpenInternalRtspFullscreen, isRelayed = isRelayed, onEnterPip = onEnterPip)
-            Spacer(modifier = Modifier.height(VerticalCardPadding))
-        }
-
-        // External RTSP stream
-        if (rtspPlayer != null) {
-            RtspStreamCard(player = rtspPlayer, onClick = onOpenRtspFullscreen, isRelayed = isRelayed, onEnterPip = onEnterPip)
-        } else if (externalVlcContent != null) {
-            VlcRtspStreamCard(vlcContent = externalVlcContent, onClick = onOpenRtspFullscreen, onEnterPip = onEnterPip)
-            Spacer(modifier = Modifier.height(VerticalCardPadding))
-        }
-
-        // Chamber light control
+@Composable
+private fun DashboardMediaSection(
+    showMainStream: Boolean,
+    internalRtspPlayer: ExoPlayer?,
+    frame: Bitmap?,
+    fps: Float,
+    isRelayed: Boolean,
+    rtspPlayer: ExoPlayer?,
+    externalVlcContent: (@Composable (Modifier) -> Unit)?,
+    isLightOn: Boolean?,
+    isMqttConnected: Boolean,
+    onOpenFullscreen: () -> Unit,
+    onOpenInternalRtspFullscreen: () -> Unit,
+    onOpenRtspFullscreen: () -> Unit,
+    onEnterPip: (() -> Unit)?,
+    onToggleLight: (Boolean) -> Unit,
+) {
+    // Mini video preview
+    if (showMainStream && internalRtspPlayer == null) {
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
         ) {
-            Row(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = HorizontalCardPadding, vertical = VerticalCardPadding),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                    .aspectRatio(16f / 9f)
+                    .background(Color.Black)
+                    .clickable { onOpenFullscreen() },
+                contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = stringResource(R.string.chamber_light),
-                    style = MaterialTheme.typography.bodyLarge,
+                if (frame != null) {
+                    Image(
+                        bitmap = frame.asImageBitmap(),
+                        contentDescription = stringResource(R.string.cd_camera_preview),
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
+
+                // FPS badge
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.fps, fps),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                    )
+                }
+
+                // Relayed badge and PiP button
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (isRelayed) {
+                        Box(
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.relayed),
+                                color = Color.White,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                    if (onEnterPip != null) {
+                        IconButton(
+                            onClick = onEnterPip,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PictureInPictureAlt,
+                                contentDescription = stringResource(R.string.cd_pip),
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(VerticalCardPadding))
+    }
+
+    // Internal RTSP stream (non-P1 printer built-in camera) — always ExoPlayer
+    if (showMainStream && internalRtspPlayer != null) {
+        RtspStreamCard(player = internalRtspPlayer, onClick = onOpenInternalRtspFullscreen, isRelayed = isRelayed, onEnterPip = onEnterPip)
+        Spacer(modifier = Modifier.height(VerticalCardPadding))
+    }
+
+    // External RTSP stream
+    if (rtspPlayer != null) {
+        RtspStreamCard(player = rtspPlayer, onClick = onOpenRtspFullscreen, isRelayed = isRelayed, onEnterPip = onEnterPip)
+        Spacer(modifier = Modifier.height(VerticalCardPadding))
+    } else if (externalVlcContent != null) {
+        VlcRtspStreamCard(vlcContent = externalVlcContent, onClick = onOpenRtspFullscreen, onEnterPip = onEnterPip)
+        Spacer(modifier = Modifier.height(VerticalCardPadding))
+    }
+
+    // Chamber light control
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = HorizontalCardPadding, vertical = VerticalCardPadding),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.chamber_light),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+
+            if (isMqttConnected && isLightOn == null) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            } else {
+                Switch(
+                    checked = isLightOn == true,
+                    onCheckedChange = { onToggleLight(it) },
+                    enabled = isMqttConnected && isLightOn != null,
                 )
-
-                if (isMqttConnected && isLightOn == null) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                } else {
-                    Switch(
-                        checked = isLightOn == true,
-                        onCheckedChange = { onToggleLight(it) },
-                        enabled = isMqttConnected && isLightOn != null,
-                    )
-                }
             }
         }
+    }
+}
 
-        Spacer(modifier = Modifier.height(VerticalCardPadding))
+@Composable
+private fun DashboardAssetsSection(
+    printerStatus: PrinterStatus,
+    series: PrinterSeries,
+    isEnclosed: Boolean,
+    isLandscape: Boolean,
+    onPrinterActionCommand: (String) -> Unit,
+    onShowNozzleDialog: () -> Unit,
+    onShowBedDialog: () -> Unit,
+    onShowPartFanDialog: () -> Unit,
+    onShowAuxFanDialog: () -> Unit,
+    onShowChamberFanDialog: () -> Unit,
+    onEditFilament: (FilamentEditTarget) -> Unit,
+) {
+    // Status
+    PrintStatusCard(
+        printerStatus = printerStatus,
+        onPrinterActionCommand = onPrinterActionCommand,
+    )
 
-        // Status
-        PrintStatusCard(
-            printerStatus = printerStatus,
-            onPrinterActionCommand = onPrinterActionCommand,
-        )
+    Spacer(modifier = Modifier.height(VerticalCardPadding))
 
-        Spacer(modifier = Modifier.height(VerticalCardPadding))
-
-        // Nozzle, Bed, Chamber & Fan speeds. Collected into a list and laid out in
-        // rows of up to three so the cards stay readable on low-res displays
-        // instead of crowding a single six-wide row.
-        val statusCards = mutableListOf<StatusCardSpec>()
+    // Nozzle, Bed, Chamber & Fan speeds. Collected into a list and laid out in
+    // rows of up to three so the cards stay readable on low-res displays
+    // instead of crowding a single six-wide row.
+    val statusCards = mutableListOf<StatusCardSpec>()
+    statusCards += StatusCardSpec(
+        title = stringResource(R.string.nozzle),
+        iconRes = R.drawable.ic_nozzle,
+        value = stringResource(R.string.temp_current_target, printerStatus.nozzleTemper, printerStatus.nozzleTargetTemper),
+        onClick = onShowNozzleDialog,
+    )
+    statusCards += StatusCardSpec(
+        title = stringResource(R.string.bed),
+        iconRes = R.drawable.ic_bed,
+        value = stringResource(R.string.temp_current_target, printerStatus.bedTemper, printerStatus.bedTargetTemper),
+        onClick = onShowBedDialog,
+    )
+    if (series.hasChamberTemp) {
         statusCards += StatusCardSpec(
-            title = stringResource(R.string.nozzle),
-            iconRes = R.drawable.ic_nozzle,
-            value = stringResource(R.string.temp_current_target, printerStatus.nozzleTemper, printerStatus.nozzleTargetTemper),
-            onClick = { showNozzleDialog = true },
+            title = stringResource(R.string.chamber),
+            iconRes = R.drawable.ic_chamber_temp,
+            value = stringResource(R.string.temp_celsius, printerStatus.chamberTemper.toInt()),
+        )
+    }
+    statusCards += StatusCardSpec(
+        title = stringResource(R.string.part_fan),
+        iconRes = R.drawable.ic_part_fan,
+        value = stringResource(R.string.percent, fanSpeedPercent(printerStatus.coolingFanSpeed)),
+        onClick = onShowPartFanDialog,
+    )
+    if (isEnclosed) {
+        statusCards += StatusCardSpec(
+            title = stringResource(R.string.aux_fan),
+            iconRes = R.drawable.ic_aux_fan,
+            value = stringResource(R.string.percent, fanSpeedPercent(printerStatus.bigFan1Speed)),
+            onClick = onShowAuxFanDialog,
         )
         statusCards += StatusCardSpec(
-            title = stringResource(R.string.bed),
-            iconRes = R.drawable.ic_bed,
-            value = stringResource(R.string.temp_current_target, printerStatus.bedTemper, printerStatus.bedTargetTemper),
-            onClick = { showBedDialog = true },
+            title = stringResource(R.string.chamber_fan),
+            iconRes = R.drawable.ic_chamber_fan,
+            value = stringResource(R.string.percent, fanSpeedPercent(printerStatus.bigFan2Speed)),
+            onClick = onShowChamberFanDialog,
         )
-        if (series.hasChamberTemp) {
-            statusCards += StatusCardSpec(
-                title = stringResource(R.string.chamber),
-                iconRes = R.drawable.ic_chamber_temp,
-                value = stringResource(R.string.temp_celsius, printerStatus.chamberTemper.toInt()),
-            )
-        }
-        statusCards += StatusCardSpec(
-            title = stringResource(R.string.part_fan),
-            iconRes = R.drawable.ic_part_fan,
-            value = stringResource(R.string.percent, fanSpeedPercent(printerStatus.coolingFanSpeed)),
-            onClick = { showPartFanDialog = true },
-        )
-        if (isEnclosed) {
-            statusCards += StatusCardSpec(
-                title = stringResource(R.string.aux_fan),
-                iconRes = R.drawable.ic_aux_fan,
-                value = stringResource(R.string.percent, fanSpeedPercent(printerStatus.bigFan1Speed)),
-                onClick = { showAuxFanDialog = true },
-            )
-            statusCards += StatusCardSpec(
-                title = stringResource(R.string.chamber_fan),
-                iconRes = R.drawable.ic_chamber_fan,
-                value = stringResource(R.string.percent, fanSpeedPercent(printerStatus.bigFan2Speed)),
-                onClick = { showChamberFanDialog = true },
-            )
-        }
-        // Only split into rows of three once there are six cards; five or fewer
-        // stay on a single row.
-        val cardsPerRow = if (statusCards.size > 5) 3 else statusCards.size
-        statusCards.chunked(cardsPerRow).forEachIndexed { rowIndex, rowCards ->
-            if (rowIndex > 0) Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                rowCards.forEach { card ->
-                    IconStatusCard(
-                        title = card.title,
-                        iconRes = card.iconRes,
-                        value = card.value,
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        onClick = card.onClick,
-                    )
-                }
-                // Pad short final rows so cards keep a consistent width across rows.
-                repeat(3 - rowCards.size) {
-                    Spacer(modifier = Modifier.weight(1f))
-                }
+    }
+    // In landscape (or with >5 cards), keep to rows of 3 to avoid cramped items.
+    val cardsPerRow = if (isLandscape || statusCards.size > 5) 3 else statusCards.size
+    statusCards.chunked(cardsPerRow).forEachIndexed { rowIndex, rowCards ->
+        if (rowIndex > 0) Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            rowCards.forEach { card ->
+                IconStatusCard(
+                    title = card.title,
+                    iconRes = card.iconRes,
+                    value = card.value,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    onClick = card.onClick,
+                )
+            }
+            // Pad short final rows so cards keep a consistent width across rows.
+            repeat(cardsPerRow - rowCards.size) {
+                Spacer(modifier = Modifier.weight(1f))
             }
         }
+    }
 
-        Spacer(modifier = Modifier.height(VerticalCardPadding))
+    Spacer(modifier = Modifier.height(VerticalCardPadding))
 
-        // AMS cards — full-width AMS, half-width AMS-HT + External Spool
-        val fullWidthAms = printerStatus.amsUnits.filter { it.model.isEmpty() || it.model.equals("AMS", ignoreCase = true) }
-        val halfWidthAms = printerStatus.amsUnits.filter { it.model.isNotEmpty() && !it.model.equals("AMS", ignoreCase = true) }
+    // AMS cards — full-width AMS, half-width AMS-HT + External Spool
+    val fullWidthAms = printerStatus.amsUnits.filter { it.model.isEmpty() || it.model.equals("AMS", ignoreCase = true) }
+    val halfWidthAms = printerStatus.amsUnits.filter { it.model.isNotEmpty() && !it.model.equals("AMS", ignoreCase = true) }
 
-        for (amsUnit in fullWidthAms) {
-            AmsCard(amsUnit, trayNow = printerStatus.trayNow) { tray ->
-                filamentEditTarget = FilamentEditTarget(
+    for (amsUnit in fullWidthAms) {
+        AmsCard(amsUnit, trayNow = printerStatus.trayNow) { tray ->
+            onEditFilament(
+                FilamentEditTarget(
                     amsId = amsUnit.id.toIntOrNull() ?: 0,
                     trayId = tray.id.toIntOrNull() ?: 0,
                     type = tray.trayType,
                     color = tray.trayColor,
                     trayInfoIdx = tray.trayInfoIdx,
                 )
-            }
-            Spacer(modifier = Modifier.height(VerticalCardPadding))
+            )
         }
+        Spacer(modifier = Modifier.height(VerticalCardPadding))
+    }
 
-        // Half-width items: AMS-HT units + External Spool, paired into rows
-        var halfIndex = 0
-        while (halfIndex < halfWidthAms.size) {
-            Row(
-                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
-                horizontalArrangement = Arrangement.spacedBy(HorizontalCardPadding),
-            ) {
-                val unit = halfWidthAms[halfIndex]
-                AmsCard(unit, modifier = Modifier.weight(1f).fillMaxHeight(), trayNow = printerStatus.trayNow) { tray ->
-                    filamentEditTarget = FilamentEditTarget(
+    // Half-width items: AMS-HT units + External Spool, paired into rows
+    var halfIndex = 0
+    while (halfIndex < halfWidthAms.size) {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+            horizontalArrangement = Arrangement.spacedBy(HorizontalCardPadding),
+        ) {
+            val unit = halfWidthAms[halfIndex]
+            AmsCard(unit, modifier = Modifier.weight(1f).fillMaxHeight(), trayNow = printerStatus.trayNow) { tray ->
+                onEditFilament(
+                    FilamentEditTarget(
                         amsId = unit.id.toIntOrNull() ?: 0,
                         trayId = tray.id.toIntOrNull() ?: 0,
                         type = tray.trayType,
                         color = tray.trayColor,
                         trayInfoIdx = tray.trayInfoIdx,
                     )
-                }
-                halfIndex++
-                if (halfIndex < halfWidthAms.size) {
-                    val unit2 = halfWidthAms[halfIndex]
-                    AmsCard(unit2, modifier = Modifier.weight(1f).fillMaxHeight(), trayNow = printerStatus.trayNow) { tray ->
-                        filamentEditTarget = FilamentEditTarget(
+                )
+            }
+            halfIndex++
+            if (halfIndex < halfWidthAms.size) {
+                val unit2 = halfWidthAms[halfIndex]
+                AmsCard(unit2, modifier = Modifier.weight(1f).fillMaxHeight(), trayNow = printerStatus.trayNow) { tray ->
+                    onEditFilament(
+                        FilamentEditTarget(
                             amsId = unit2.id.toIntOrNull() ?: 0,
                             trayId = tray.id.toIntOrNull() ?: 0,
                             type = tray.trayType,
                             color = tray.trayColor,
                             trayInfoIdx = tray.trayInfoIdx,
                         )
-                    }
-                    halfIndex++
-                } else {
-                    // Pair last AMS-HT with External Spool
-                    ExternalSpoolCard(printerStatus.vtTray, modifier = Modifier.weight(1f).fillMaxHeight(), isActive = printerStatus.trayNow == "254") {
-                        filamentEditTarget = FilamentEditTarget(
+                    )
+                }
+                halfIndex++
+            } else {
+                // Pair last AMS-HT with External Spool
+                ExternalSpoolCard(printerStatus.vtTray, modifier = Modifier.weight(1f).fillMaxHeight(), isActive = printerStatus.trayNow == "254") {
+                    onEditFilament(
+                        FilamentEditTarget(
                             amsId = 255,
                             trayId = 254,
                             type = printerStatus.vtTray?.trayType ?: "",
                             color = printerStatus.vtTray?.trayColor ?: "",
                             trayInfoIdx = printerStatus.vtTray?.trayInfoIdx ?: "",
                         )
-                    }
-                    halfIndex++ // signal we used external spool
+                    )
                 }
+                halfIndex++ // signal we used external spool
             }
-            Spacer(modifier = Modifier.height(VerticalCardPadding))
         }
+        Spacer(modifier = Modifier.height(VerticalCardPadding))
+    }
 
-        // External spool — full-width if not already paired above
-        if (halfWidthAms.size % 2 == 0) {
-            ExternalSpoolCard(printerStatus.vtTray, isActive = printerStatus.trayNow == "254") {
-                filamentEditTarget = FilamentEditTarget(
+    // External spool — full-width if not already paired above
+    if (halfWidthAms.size % 2 == 0) {
+        ExternalSpoolCard(printerStatus.vtTray, isActive = printerStatus.trayNow == "254") {
+            onEditFilament(
+                FilamentEditTarget(
                     amsId = 255,
                     trayId = 254,
                     type = printerStatus.vtTray?.trayType ?: "",
                     color = printerStatus.vtTray?.trayColor ?: "",
                     trayInfoIdx = printerStatus.vtTray?.trayInfoIdx ?: "",
                 )
-            }
-            Spacer(modifier = Modifier.height(VerticalCardPadding))
+            )
         }
-
-        Spacer(modifier = Modifier.height(32.dp))
-        } // scrollable Column
+        Spacer(modifier = Modifier.height(VerticalCardPadding))
     }
-    } // Scaffold
-    } // ModalNavigationDrawer
 }
 
 @Composable

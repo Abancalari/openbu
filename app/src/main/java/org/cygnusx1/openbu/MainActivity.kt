@@ -41,6 +41,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import org.cygnusx1.openbu.data.FilamentRepository
+import org.cygnusx1.openbu.data.ModelPackageHelper
 import org.cygnusx1.openbu.data.PrintJobRequest
 import org.cygnusx1.openbu.data.PrintOptions
 import org.cygnusx1.openbu.network.Socks5SocketFactory
@@ -202,15 +203,18 @@ class MainActivity : ComponentActivity() {
             Log.w("MainActivity", "Failed to query incoming file Uri", e)
         }
 
-        val lower = fileName.lowercase()
+        var resolvedFileName = ModelPackageHelper.sanitizePrintFileName(fileName) {
+            try { contentResolver.openInputStream(targetUri) } catch (_: Exception) { null }
+        }
+
+        val lower = resolvedFileName.lowercase()
         val is3mf = lower.endsWith(".3mf")
         val isGcode = lower.endsWith(".gcode")
-        var resolvedFileName = fileName
         if (!is3mf && !isGcode) {
             val mime = intent.type ?: try { contentResolver.getType(targetUri) } catch (_: Exception) { null }
             if (mime == "model/3mf" || mime == "application/vnd.ms-package.3dmanufacturing-3dmodel+xml") {
                 resolvedFileName = "$resolvedFileName.3mf"
-            } else if (mime == "text/x-gcode") {
+            } else if (mime == "text/x-gcode" || mime == "text/gcode") {
                 resolvedFileName = "$resolvedFileName.gcode"
             }
         }

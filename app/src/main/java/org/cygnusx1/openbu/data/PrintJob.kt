@@ -29,6 +29,63 @@ object ModelPackageHelper {
         val plateCount: Int = 1,
     )
 
+    fun sanitizePrintFileName(rawName: String, inputStreamProvider: (() -> InputStream?)? = null): String {
+        var name = rawName.trim()
+        val lower = name.lowercase()
+
+        // 1. Direct .3mf or .gcode
+        if (lower.endsWith(".3mf") || lower.endsWith(".gcode")) {
+            return name
+        }
+
+        // 2. Trailing .txt check (Chrome often appends .txt to .3mf or .gcode)
+        if (lower.endsWith(".txt")) {
+            val withoutTxt = name.substring(0, name.length - 4).trim()
+            val withoutTxtLower = withoutTxt.lowercase()
+
+            // e.g. "model.3mf.txt" -> "model.3mf"
+            if (withoutTxtLower.endsWith(".3mf") || withoutTxtLower.endsWith(".gcode")) {
+                return withoutTxt
+            }
+
+            // e.g. "model.3mf (1).txt" or "model.3mf_1.txt" -> "model (1).3mf"
+            val regex3mf = Regex("^(.*)\\.3mf([_\\s\\-\\(\\)\\d]+)$", RegexOption.IGNORE_CASE)
+            val match3mf = regex3mf.matchEntire(withoutTxt)
+            if (match3mf != null) {
+                return "${match3mf.groupValues[1]}${match3mf.groupValues[2]}.3mf"
+            }
+
+            val regexGcode = Regex("^(.*)\\.gcode([_\\s\\-\\(\\)\\d]+)$", RegexOption.IGNORE_CASE)
+            val matchGcode = regexGcode.matchEntire(withoutTxt)
+            if (matchGcode != null) {
+                return "${matchGcode.groupValues[1]}${matchGcode.groupValues[2]}.gcode"
+            }
+        }
+
+        // 3. Fallback: inspect magic bytes from input stream if provided
+        if (inputStreamProvider != null) {
+            try {
+                inputStreamProvider()?.use { stream ->
+                    val header = ByteArray(512)
+                    val read = stream.read(header)
+                    if (read >= 4 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() && header[2] == 0x03.toByte() && header[3] == 0x04.toByte()) {
+                        // ZIP archive magic bytes (3MF is a ZIP archive)
+                        val base = if (name.lowercase().endsWith(".txt")) name.substring(0, name.length - 4) else name
+                        return "$base.3mf"
+                    } else if (read > 0) {
+                        val headerText = String(header, 0, read, Charsets.UTF_8).trimStart()
+                        if (headerText.startsWith(";") || headerText.startsWith("G", ignoreCase = true) || headerText.startsWith("M", ignoreCase = true)) {
+                            val base = if (name.lowercase().endsWith(".txt")) name.substring(0, name.length - 4) else name
+                            return "$base.gcode"
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        return name
+    }
+
     fun inspect3mf(input: InputStream, plateIndex: Int = 1): PackageMetadata {
         var foundMd5: String? = null
         var computedMd5: String? = null

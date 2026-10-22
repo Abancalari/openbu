@@ -1600,6 +1600,9 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
             }
         }
 
+        fileName = ModelPackageHelper.sanitizePrintFileName(fileName) {
+            try { app.contentResolver.openInputStream(uri) } catch (_: Exception) { null }
+        }
         val lowerName = fileName.lowercase()
         if (!lowerName.endsWith(".3mf") && !lowerName.endsWith(".gcode")) {
             _ftpError.value = "Only .3mf and .gcode files can be uploaded"
@@ -1737,6 +1740,9 @@ class BambuStreamViewModel(application: Application) : AndroidViewModel(applicat
                 val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
                 if (sizeIdx >= 0) fileSize = cursor.getLong(sizeIdx)
             }
+        }
+        fileName = ModelPackageHelper.sanitizePrintFileName(fileName) {
+            try { app.contentResolver.openInputStream(uri) } catch (_: Exception) { null }
         }
         val lowerName = fileName.lowercase()
         if (!lowerName.endsWith(".3mf") && !lowerName.endsWith(".gcode")) {

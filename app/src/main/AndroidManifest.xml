@@ -24,13 +24,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <!-- Open .3mf and .gcode files directly (from Downloads, file managers, browsers) -->
+            <!-- 1. Match files by extension (file:// or content:// with filename in path) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="file" />
                 <data android:scheme="content" />
-                <data android:host="*" />
                 <data android:pathPattern=".*\\.3mf" />
                 <data android:pathPattern=".*\\.3MF" />
                 <data android:pathPattern=".*\\.gcode" />
@@ -39,7 +39,16 @@
                 <data android:pathSuffix=".3MF" />
                 <data android:pathSuffix=".gcode" />
                 <data android:pathSuffix=".GCODE" />
+                <data android:pathPattern=".*\\.3mf\\.txt" />
+                <data android:pathPattern=".*\\.3MF\\.txt" />
+                <data android:pathPattern=".*\\.gcode\\.txt" />
+                <data android:pathPattern=".*\\.GCODE\\.txt" />
+                <data android:pathSuffix=".3mf.txt" />
+                <data android:pathSuffix=".3MF.txt" />
+                <data android:pathSuffix=".gcode.txt" />
+                <data android:pathSuffix=".GCODE.txt" />
             </intent-filter>
+            <!-- 2. Match files with generic MIME type (*/*) and specific extension in path -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -47,7 +56,6 @@
                 <data android:scheme="file" />
                 <data android:scheme="content" />
                 <data android:mimeType="*/*" />
-                <data android:host="*" />
                 <data android:pathPattern=".*\\.3mf" />
                 <data android:pathPattern=".*\\.3MF" />
                 <data android:pathPattern=".*\\.gcode" />
@@ -56,26 +64,60 @@
                 <data android:pathSuffix=".3MF" />
                 <data android:pathSuffix=".gcode" />
                 <data android:pathSuffix=".GCODE" />
+                <data android:pathPattern=".*\\.3mf\\.txt" />
+                <data android:pathPattern=".*\\.3MF\\.txt" />
+                <data android:pathPattern=".*\\.gcode\\.txt" />
+                <data android:pathPattern=".*\\.GCODE\\.txt" />
+                <data android:pathSuffix=".3mf.txt" />
+                <data android:pathSuffix=".3MF.txt" />
+                <data android:pathSuffix=".gcode.txt" />
+                <data android:pathSuffix=".GCODE.txt" />
             </intent-filter>
+            <!-- 3. Match text/plain when Chrome appends .txt to 3mf or gcode -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="file" />
                 <data android:scheme="content" />
-                <data android:mimeType="application/octet-stream" />
-                <data android:mimeType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
+                <data android:mimeType="text/plain" />
+                <data android:pathPattern=".*\\.3mf\\.txt" />
+                <data android:pathPattern=".*\\.3MF\\.txt" />
+                <data android:pathPattern=".*\\.gcode\\.txt" />
+                <data android:pathPattern=".*\\.GCODE\\.txt" />
+                <data android:pathSuffix=".3mf.txt" />
+                <data android:pathSuffix=".3MF.txt" />
+                <data android:pathSuffix=".gcode.txt" />
+                <data android:pathSuffix=".GCODE.txt" />
+            </intent-filter>
+            <!-- 4. Match files by 3MF/G-code/ZIP MIME types regardless of URI path scheme (for opaque content:// IDs) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
                 <data android:mimeType="model/3mf" />
+                <data android:mimeType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip" />
+                <data android:mimeType="application/x-zip-compressed" />
                 <data android:mimeType="text/x-gcode" />
+                <data android:mimeType="text/gcode" />
             </intent-filter>
             <!-- Receive shared .3mf and .gcode files from other apps -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/octet-stream" />
-                <data android:mimeType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
                 <data android:mimeType="model/3mf" />
+                <data android:mimeType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip" />
+                <data android:mimeType="application/x-zip-compressed" />
                 <data android:mimeType="text/x-gcode" />
+                <data android:mimeType="text/gcode" />
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
